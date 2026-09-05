@@ -36,6 +36,7 @@ export interface Product {
   stockQuantity: string;
   minStockQuantity: string;
   active: boolean;
+  needsReview?: boolean;
 }
 
 export interface Customer {
@@ -131,6 +132,40 @@ export interface FinancialTransaction {
   installmentNumber: number;
   installmentTotal: number;
   overdue?: boolean;
+}
+
+export type NfeAmbiente = "PRODUCAO" | "HOMOLOGACAO";
+
+export interface CompanySettings {
+  cnpj?: string | null;
+  razaoSocial?: string | null;
+  uf?: string | null;
+  ambiente: NfeAmbiente;
+  hasCertificate: boolean;
+  certificateFileName?: string | null;
+  certificateSubjectCn?: string | null;
+  certificateValidTo?: string | null;
+  certificateUploadedAt?: string | null;
+  nfeUltNsu: string;
+  lastRadarCheckAt?: string | null;
+  lastRadarStatus?: string | null;
+  lastRadarError?: string | null;
+}
+
+export type NfeImportStatus = "IMPORTADA" | "ERRO" | "IGNORADA";
+
+export interface NfeImport {
+  id: string;
+  chaveAcesso: string;
+  emitenteCnpj: string;
+  emitenteNome: string;
+  valorTotal: string;
+  dataEmissao: string;
+  status: NfeImportStatus;
+  errorMessage?: string | null;
+  createdAt: string;
+  supplier?: Supplier | null;
+  purchaseOrder?: PurchaseOrder | null;
 }
 
 export interface DashboardData {

@@ -10,6 +10,8 @@ import { Purchases } from "./pages/Purchases";
 import { Customers } from "./pages/Customers";
 import { Suppliers } from "./pages/Suppliers";
 import { Financial } from "./pages/Financial";
+import { Settings } from "./pages/Settings";
+import { NfeRadar } from "./pages/NfeRadar";
 
 export function App() {
   return (
@@ -26,6 +28,8 @@ export function App() {
               <Route path="/clientes" element={<Customers />} />
               <Route path="/fornecedores" element={<Suppliers />} />
               <Route path="/financeiro" element={<Financial />} />
+              <Route path="/nfe-radar" element={<NfeRadar />} />
+              <Route path="/configuracoes" element={<Settings />} />
             </Route>
           </Route>
         </Routes>

@@ -22,6 +22,9 @@ export function Products() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState<string | null>(null);
+  const [onlyNeedsReview, setOnlyNeedsReview] = useState(false);
+
+  const visibleProducts = onlyNeedsReview ? products.filter((p) => p.needsReview) : products;
 
   async function loadProducts() {
     const response = await api.get<Product[]>("/products", { params: { search } });
@@ -75,6 +78,15 @@ export function Products() {
         quantity,
         reason: "Ajuste manual via sistema",
       });
+      await loadProducts();
+    } catch (err) {
+      window.alert(getApiErrorMessage(err));
+    }
+  }
+
+  async function handleMarkReviewed(productId: string) {
+    try {
+      await api.patch(`/products/${productId}`, { needsReview: false });
       await loadProducts();
     } catch (err) {
       window.alert(getApiErrorMessage(err));
@@ -192,6 +204,14 @@ export function Products() {
         <button type="submit" className="bg-slate-800 text-white text-sm px-4 py-2 rounded">
           Buscar
         </button>
+        <label className="flex items-center gap-2 text-sm text-slate-600 whitespace-nowrap">
+          <input
+            type="checkbox"
+            checked={onlyNeedsReview}
+            onChange={(e) => setOnlyNeedsReview(e.target.checked)}
+          />
+          Somente precisam revisao
+        </label>
       </form>
 
       <div className="bg-white rounded-lg shadow-sm overflow-x-auto">
@@ -208,17 +228,33 @@ export function Products() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {products.map((product) => (
+            {visibleProducts.map((product) => (
               <tr key={product.id}>
                 <td className="px-4 py-2">{product.sku}</td>
-                <td className="px-4 py-2">{product.name}</td>
+                <td className="px-4 py-2">
+                  {product.name}
+                  {product.needsReview && (
+                    <span className="ml-2 inline-block text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded">
+                      Revisar
+                    </span>
+                  )}
+                </td>
                 <td className="px-4 py-2">{product.category?.name ?? "-"}</td>
                 <td className="px-4 py-2">
                   {product.stockQuantity} {product.unit?.abbreviation}
                 </td>
                 <td className="px-4 py-2">{formatCurrency(product.averageCost)}</td>
                 <td className="px-4 py-2">{formatCurrency(product.salePrice)}</td>
-                <td className="px-4 py-2 text-right">
+                <td className="px-4 py-2 text-right space-x-3">
+                  {product.needsReview && (
+                    <button
+                      type="button"
+                      onClick={() => handleMarkReviewed(product.id)}
+                      className="text-emerald-600 hover:underline"
+                    >
+                      Marcar revisado
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => handleStockAdjustment(product.id)}

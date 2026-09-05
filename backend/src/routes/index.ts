@@ -10,6 +10,8 @@ import salesRoutes from "../modules/sales/sales.routes";
 import purchasesRoutes from "../modules/purchases/purchases.routes";
 import financialRoutes from "../modules/financial/financial.routes";
 import dashboardRoutes from "../modules/dashboard/dashboard.routes";
+import settingsRoutes from "../modules/settings/settings.routes";
+import nfeRoutes from "../modules/nfe/nfe.routes";
 
 const router = Router();
 
@@ -24,5 +26,7 @@ router.use("/sales", salesRoutes);
 router.use("/purchases", purchasesRoutes);
 router.use("/financial", financialRoutes);
 router.use("/dashboard", dashboardRoutes);
+router.use("/settings", settingsRoutes);
+router.use("/nfe", nfeRoutes);
 
 export default router;

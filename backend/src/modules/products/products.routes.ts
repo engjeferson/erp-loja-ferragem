@@ -19,6 +19,7 @@ const productSchema = z.object({
   costPrice: z.number().nonnegative().default(0),
   salePrice: z.number().nonnegative().default(0),
   minStockQuantity: z.number().nonnegative().default(0),
+  needsReview: z.boolean().optional(),
 });
 
 const stockAdjustmentSchema = z.object({

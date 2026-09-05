@@ -16,6 +16,17 @@ Sistema de gestão para lojas de material de construção, tintas e ferragens: e
 - **Compras**: pedido de compra → recebimento (entrada de estoque + atualização de custo médio + lançamento financeiro a pagar, com parcelamento).
 - **Financeiro**: lançamentos unificados de contas a pagar/receber (`FinancialTransaction`), com categorias, parcelamento e status "vencido" sempre calculado a partir da data de vencimento (nunca fica dessincronizado).
 - **Dashboard**: vendas do dia/mês, produtos com estoque baixo, resumo financeiro, vendas recentes.
+- **Configurações**: cadastro do CNPJ/UF/ambiente fiscal da empresa e upload do certificado digital A1 (`.pfx`/`.p12`) usado pelo radar de NF-e — o cliente consegue trocar o certificado sozinho, sem depender do desenvolvedor.
+- **Radar de NF-e**: busca manual (botão "Buscar novas notas") das notas fiscais de compra emitidas contra o CNPJ da empresa junto à SEFAZ (webservice nacional de Distribuição DFe). Cada nota nova encontrada é importada **automaticamente**: fornecedor e produtos são localizados ou criados (find-or-create), o estoque é dado como entrada (com atualização de custo médio), e o financeiro a pagar é lançado — parcelado conforme as duplicatas da nota, quando houver.
+
+### Sobre o Radar de NF-e (certificado digital)
+
+- O certificado (.pfx/.p12) e a senha são criptografados com AES-256-GCM antes de ir para o banco (`backend/src/lib/encryption.ts`); a chave de criptografia (`ENCRYPTION_KEY`) vive só em variável de ambiente, nunca no banco.
+- No upload, o certificado é validado (senha + leitura do PKCS#12) e o titular/validade são exibidos na tela de Configurações antes de qualquer chamada à SEFAZ.
+- A consulta em si (`backend/src/lib/nfeSefaz.ts`) autentica por mTLS direto com a SEFAZ (webservice `NFeDistribuicaoDFe`, Ambiente Nacional) — não depende de nenhum serviço terceirizado.
+- Produtos criados automaticamente pelo radar entram com `needsReview = true` e preço de venda igual ao de custo (0% de margem) — a tela de Produtos tem um filtro "Somente precisam revisão" e um botão "Marcar revisado" para o lojista ajustar preço/categoria depois.
+- **Importante**: esta integração foi escrita a partir da documentação/XSD pública da SEFAZ, mas não pôde ser testada contra o webservice real durante o desenvolvimento (sem acesso de rede a domínios `gov.br` no ambiente de build). Valide o fluxo ponta a ponta em produção com um certificado real antes de confiar 100% nela — em especial o ambiente de Homologação primeiro, se possível.
+- Hoje a busca é manual (botão). Rodar isso automaticamente em intervalo (ex: a cada X horas) exigiria um job agendado (cron) — não implementado ainda.
 
 ## Rodando localmente
 
@@ -40,6 +51,12 @@ npm run dev               # http://localhost:3333
 
 Usuário criado pelo seed: `admin@loja.com` / `admin123` — **troque a senha em produção**.
 
+Antes de rodar, gere a `ENCRYPTION_KEY` do `.env` (usada para cifrar o certificado digital):
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
 ### 3. Frontend
 
 ```bash
@@ -61,10 +78,18 @@ npm run build:frontend
 - **Estoque como ledger**: o saldo (`Product.stockQuantity`) é sempre atualizado dentro da mesma transação que cria o `StockMovement` correspondente — nunca é setado diretamente por fora desse fluxo. Isso mantém um histórico auditável de toda movimentação.
 - **Custo médio ponderado**: a cada recebimento de compra, `averageCost` é recalculado como `(estoqueAtual * custoMedioAtual + qtdEntrada * custoEntrada) / novoEstoque`. É a base para saber quanto vale o estoque e qual a margem real de venda.
 - **Financeiro unificado**: uma única tabela `FinancialTransaction` (tipo `PAGAR`/`RECEBER`) em vez de duas tabelas separadas — permite parcelamento (`installmentGroupId`/`installmentNumber`/`installmentTotal`) e relatórios consistentes. O status "vencido" nunca é armazenado: é sempre `status == PENDENTE && dueDate < hoje`, computado sob demanda.
+- **Certificado nunca em texto plano**: `CompanySettings` guarda o `.pfx` e a senha como bytes cifrados (AES-256-GCM) + IV + auth tag; a chave de cifra é uma env var (`ENCRYPTION_KEY`) que nunca é versionada nem persistida no banco.
+- **NfeImport como trava de idempotência**: cada chave de acesso de NF-e só é processada uma vez (`chaveAcesso` é `@unique`) — rodar o radar de novo sobre o mesmo intervalo de NSU nunca duplica estoque ou financeiro.
 
 ## Próximos passos sugeridos
 
+- Validar o Radar de NF-e ponta a ponta com certificado real em produção (não pôde ser testado no ambiente de desenvolvimento — ver seção acima).
+- Agendar o radar (cron) em vez de depender do clique manual em "Buscar novas notas".
 - Emissão de nota fiscal (NFC-e para venda ao consumidor final).
 - Comissão de vendedor e tabelas de preço por cliente.
 - Permissões granulares por módulo (hoje simplificado em papéis fixos).
 - Testes automatizados (unitários nas regras de estoque/financeiro e e2e nas rotas principais).
+
+## Vulnerabilidades conhecidas (dependências)
+
+`npm audit` na raiz aponta vulnerabilidades moderadas em `express`/`body-parser`/`qs` (backend), `vite`/`esbuild` (dev-only) e `react-router` (frontend) — todas exigem upgrade de major version das respectivas libs, fora do escopo das mudanças atuais. Vale planejar essas atualizações (com teste de regressão) em um momento dedicado.

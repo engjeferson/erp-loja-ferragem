@@ -1,7 +1,8 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
+import { Role } from "../types";
 
-const navItems = [
+const navItems: { to: string; label: string; roles?: Role[] }[] = [
   { to: "/", label: "Dashboard" },
   { to: "/produtos", label: "Produtos" },
   { to: "/pdv", label: "PDV / Vendas" },
@@ -9,10 +10,13 @@ const navItems = [
   { to: "/clientes", label: "Clientes" },
   { to: "/fornecedores", label: "Fornecedores" },
   { to: "/financeiro", label: "Financeiro" },
+  { to: "/nfe-radar", label: "Radar de NF-e", roles: ["ADMIN", "GERENTE"] },
+  { to: "/configuracoes", label: "Configuracoes", roles: ["ADMIN", "GERENTE"] },
 ];
 
 export function AppLayout() {
   const { user, logout } = useAuth();
+  const visibleItems = navItems.filter((item) => !item.roles || (user && item.roles.includes(user.role)));
 
   return (
     <div className="flex min-h-screen">
@@ -21,7 +25,7 @@ export function AppLayout() {
           ERP Loja Ferragem
         </div>
         <nav className="flex-1 py-4">
-          {navItems.map((item) => (
+          {visibleItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

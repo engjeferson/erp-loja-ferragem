@@ -104,6 +104,10 @@ model Product {
   stockQuantity    Decimal  @default(0) @db.Decimal(12, 3)
   minStockQuantity Decimal  @default(0) @db.Decimal(12, 3)
   active           Boolean  @default(true)
+  /// true quando o produto foi criado automaticamente pelo radar de NF-e
+  /// (nome/preco vieram da nota, sem curadoria humana) - fica sinalizado
+  /// ate alguem revisar categoria e preco de venda.
+  needsReview      Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -162,6 +166,7 @@ model Supplier {
 
   purchaseOrders        PurchaseOrder[]
   financialTransactions FinancialTransaction[]
+  nfeImports            NfeImport[]
 
   @@map("suppliers")
 }
@@ -222,6 +227,7 @@ model PurchaseOrder {
 
   items                 PurchaseOrderItem[]
   financialTransactions FinancialTransaction[]
+  nfeImport             NfeImport?
 
   @@map("purchase_orders")
 }
@@ -289,4 +295,75 @@ model FinancialTransaction {
   @@index([type, status])
   @@index([installmentGroupId])
   @@map("financial_transactions")
+}
+
+enum NfeAmbiente {
+  PRODUCAO
+  HOMOLOGACAO
+}
+
+/// Configuracao fiscal da empresa: dados do CNPJ e o certificado digital A1
+/// usado para autenticar (mTLS) no webservice de Distribuicao DFe da SEFAZ.
+/// O arquivo do certificado e a senha nunca sao gravados em texto plano -
+/// ambos passam por AES-256-GCM (ver src/lib/encryption.ts) com a chave
+/// vinda de ENCRYPTION_KEY (variavel de ambiente, nunca fica no banco).
+/// Linha unica (singleton) - sempre acessada/atualizada pelo id fixo "default".
+model CompanySettings {
+  id          String      @id @default("default")
+  cnpj        String?
+  razaoSocial String?
+  uf          String?
+  ambiente    NfeAmbiente @default(PRODUCAO)
+
+  certificateFileName   String?
+  certificateUploadedAt DateTime?
+  certificateSubjectCn  String?
+  certificateValidTo    DateTime?
+  certificateData       Bytes?
+  certificateIv         Bytes?
+  certificateAuthTag    Bytes?
+  certificatePassword   Bytes?
+  certificatePasswordIv Bytes?
+  certificatePasswordTag Bytes?
+
+  nfeUltNsu        String    @default("000000000000000")
+  nfeMaxNsu        String    @default("000000000000000")
+  lastRadarCheckAt DateTime?
+  lastRadarStatus  String?
+  lastRadarError   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("company_settings")
+}
+
+enum NfeImportStatus {
+  IMPORTADA
+  ERRO
+  IGNORADA
+}
+
+/// Log de auditoria de cada NF-e detectada pelo radar: uma linha por chave
+/// de acesso, nunca duplicada (evita reprocessar/relancar estoque 2x para
+/// a mesma nota caso o radar rode de novo sobre o mesmo NSU).
+model NfeImport {
+  id              String          @id @default(uuid())
+  chaveAcesso     String          @unique
+  nsu             String
+  supplierId      String?
+  purchaseOrderId String?         @unique
+  emitenteCnpj    String
+  emitenteNome    String
+  valorTotal      Decimal         @db.Decimal(12, 2)
+  dataEmissao     DateTime
+  status          NfeImportStatus @default(IMPORTADA)
+  errorMessage    String?
+  createdAt       DateTime        @default(now())
+
+  supplier      Supplier?      @relation(fields: [supplierId], references: [id])
+  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+
+  @@index([status])
+  @@map("nfe_imports")
 }
