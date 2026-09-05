@@ -1,0 +1,237 @@
+import { FormEvent, useEffect, useState } from "react";
+import { api, getApiErrorMessage } from "../services/api";
+import { Category, Product, Unit } from "../types";
+import { formatCurrency } from "../utils/format";
+
+const emptyForm = {
+  sku: "",
+  name: "",
+  barcode: "",
+  categoryId: "",
+  unitId: "",
+  costPrice: "0",
+  salePrice: "0",
+  minStockQuantity: "0",
+};
+
+export function Products() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [units, setUnits] = useState<Unit[]>([]);
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState(emptyForm);
+  const [error, setError] = useState<string | null>(null);
+
+  async function loadProducts() {
+    const response = await api.get<Product[]>("/products", { params: { search } });
+    setProducts(response.data);
+  }
+
+  useEffect(() => {
+    loadProducts();
+    api.get<Category[]>("/categories").then((r) => setCategories(r.data));
+    api.get<Unit[]>("/units").then((r) => setUnits(r.data));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleSearch(event: FormEvent) {
+    event.preventDefault();
+    await loadProducts();
+  }
+
+  async function handleCreate(event: FormEvent) {
+    event.preventDefault();
+    setError(null);
+    try {
+      await api.post("/products", {
+        sku: form.sku,
+        name: form.name,
+        barcode: form.barcode || undefined,
+        categoryId: form.categoryId || undefined,
+        unitId: form.unitId,
+        costPrice: Number(form.costPrice),
+        salePrice: Number(form.salePrice),
+        minStockQuantity: Number(form.minStockQuantity),
+      });
+      setForm(emptyForm);
+      setShowForm(false);
+      await loadProducts();
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    }
+  }
+
+  async function handleStockAdjustment(productId: string) {
+    const raw = window.prompt(
+      "Ajuste de estoque (use numero negativo para saida, positivo para entrada):",
+    );
+    if (!raw) return;
+    const quantity = Number(raw);
+    if (Number.isNaN(quantity) || quantity === 0) return;
+
+    try {
+      await api.post(`/products/${productId}/stock-adjustments`, {
+        quantity,
+        reason: "Ajuste manual via sistema",
+      });
+      await loadProducts();
+    } catch (err) {
+      window.alert(getApiErrorMessage(err));
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-semibold text-slate-800">Produtos</h1>
+        <button
+          type="button"
+          onClick={() => setShowForm((prev) => !prev)}
+          className="bg-brand-600 hover:bg-brand-700 text-white text-sm px-4 py-2 rounded"
+        >
+          {showForm ? "Cancelar" : "Novo produto"}
+        </button>
+      </div>
+
+      {showForm && (
+        <form
+          onSubmit={handleCreate}
+          className="bg-white rounded-lg shadow-sm p-4 grid grid-cols-2 md:grid-cols-3 gap-3"
+        >
+          {error && (
+            <div className="col-span-full bg-red-50 text-red-700 text-sm px-3 py-2 rounded">
+              {error}
+            </div>
+          )}
+          <input
+            required
+            placeholder="SKU"
+            value={form.sku}
+            onChange={(e) => setForm({ ...form, sku: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm"
+          />
+          <input
+            required
+            placeholder="Nome"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm col-span-2"
+          />
+          <input
+            placeholder="Codigo de barras"
+            value={form.barcode}
+            onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm"
+          />
+          <select
+            value={form.categoryId}
+            onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm"
+          >
+            <option value="">Sem categoria</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <select
+            required
+            value={form.unitId}
+            onChange={(e) => setForm({ ...form, unitId: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm"
+          >
+            <option value="">Unidade</option>
+            {units.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name} ({u.abbreviation})
+              </option>
+            ))}
+          </select>
+          <input
+            type="number"
+            step="0.01"
+            placeholder="Preco de custo"
+            value={form.costPrice}
+            onChange={(e) => setForm({ ...form, costPrice: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm"
+          />
+          <input
+            type="number"
+            step="0.01"
+            placeholder="Preco de venda"
+            value={form.salePrice}
+            onChange={(e) => setForm({ ...form, salePrice: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm"
+          />
+          <input
+            type="number"
+            step="0.01"
+            placeholder="Estoque minimo"
+            value={form.minStockQuantity}
+            onChange={(e) => setForm({ ...form, minStockQuantity: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm"
+          />
+          <button
+            type="submit"
+            className="bg-brand-600 hover:bg-brand-700 text-white text-sm px-4 py-2 rounded col-span-full md:col-span-1"
+          >
+            Salvar produto
+          </button>
+        </form>
+      )}
+
+      <form onSubmit={handleSearch} className="flex gap-2">
+        <input
+          placeholder="Buscar por nome, SKU ou codigo de barras"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="border border-slate-300 rounded px-3 py-2 text-sm flex-1"
+        />
+        <button type="submit" className="bg-slate-800 text-white text-sm px-4 py-2 rounded">
+          Buscar
+        </button>
+      </form>
+
+      <div className="bg-white rounded-lg shadow-sm overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 text-left">
+            <tr>
+              <th className="px-4 py-2">SKU</th>
+              <th className="px-4 py-2">Nome</th>
+              <th className="px-4 py-2">Categoria</th>
+              <th className="px-4 py-2">Estoque</th>
+              <th className="px-4 py-2">Custo medio</th>
+              <th className="px-4 py-2">Preco venda</th>
+              <th className="px-4 py-2"></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {products.map((product) => (
+              <tr key={product.id}>
+                <td className="px-4 py-2">{product.sku}</td>
+                <td className="px-4 py-2">{product.name}</td>
+                <td className="px-4 py-2">{product.category?.name ?? "-"}</td>
+                <td className="px-4 py-2">
+                  {product.stockQuantity} {product.unit?.abbreviation}
+                </td>
+                <td className="px-4 py-2">{formatCurrency(product.averageCost)}</td>
+                <td className="px-4 py-2">{formatCurrency(product.salePrice)}</td>
+                <td className="px-4 py-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => handleStockAdjustment(product.id)}
+                    className="text-brand-600 hover:underline"
+                  >
+                    Ajustar estoque
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

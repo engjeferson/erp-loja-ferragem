@@ -1,0 +1,20 @@
+{
+  "name": "erp-loja-ferragem",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sistema de gestao (ERP) para lojas de material de construcao, tintas e ferragens",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "build:backend": "npm run build --workspace=backend",
+    "build:frontend": "npm run build --workspace=frontend",
+    "prisma:generate": "npm run prisma:generate --workspace=backend",
+    "prisma:migrate": "npm run prisma:migrate --workspace=backend",
+    "prisma:seed": "npm run prisma:seed --workspace=backend"
+  },
+  "license": "UNLICENSED"
+}

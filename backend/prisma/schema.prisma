@@ -1,0 +1,292 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  GERENTE
+  VENDEDOR
+  FINANCEIRO
+}
+
+enum StockMovementType {
+  ENTRADA
+  SAIDA
+  AJUSTE
+}
+
+enum SaleStatus {
+  ORCAMENTO
+  CONFIRMADA
+  CANCELADA
+}
+
+enum PurchaseOrderStatus {
+  PENDENTE
+  RECEBIDA
+  CANCELADA
+}
+
+enum PaymentMethod {
+  DINHEIRO
+  PIX
+  CARTAO_DEBITO
+  CARTAO_CREDITO
+  BOLETO
+  FIADO
+}
+
+enum FinancialType {
+  PAGAR
+  RECEBER
+}
+
+enum FinancialStatus {
+  PENDENTE
+  PAGO
+  CANCELADO
+}
+
+model User {
+  id           String    @id @default(uuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         Role      @default(VENDEDOR)
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  sales           Sale[]
+  purchaseOrders  PurchaseOrder[]
+  stockMovements  StockMovement[]
+
+  @@map("users")
+}
+
+model Category {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  description String?
+  createdAt   DateTime  @default(now())
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Unit {
+  id           String @id @default(uuid())
+  name         String @unique
+  abbreviation String @unique
+
+  products Product[]
+
+  @@map("units")
+}
+
+model Product {
+  id               String   @id @default(uuid())
+  sku              String   @unique
+  barcode          String?  @unique
+  name             String
+  description      String?
+  categoryId       String?
+  unitId           String
+  costPrice        Decimal  @default(0) @db.Decimal(12, 2)
+  salePrice        Decimal  @default(0) @db.Decimal(12, 2)
+  averageCost      Decimal  @default(0) @db.Decimal(12, 4)
+  stockQuantity    Decimal  @default(0) @db.Decimal(12, 3)
+  minStockQuantity Decimal  @default(0) @db.Decimal(12, 3)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  category Category? @relation(fields: [categoryId], references: [id])
+  unit     Unit      @relation(fields: [unitId], references: [id])
+
+  stockMovements     StockMovement[]
+  saleItems          SaleItem[]
+  purchaseOrderItems PurchaseOrderItem[]
+
+  @@index([categoryId])
+  @@map("products")
+}
+
+model StockMovement {
+  id            String            @id @default(uuid())
+  productId     String
+  userId        String?
+  type          StockMovementType
+  quantity      Decimal           @db.Decimal(12, 3)
+  reason        String?
+  referenceType String?
+  referenceId   String?
+  createdAt     DateTime          @default(now())
+
+  product Product @relation(fields: [productId], references: [id])
+  user    User?   @relation(fields: [userId], references: [id])
+
+  @@index([productId])
+  @@map("stock_movements")
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  name      String
+  document  String?  @unique
+  phone     String?
+  email     String?
+  address   String?
+  createdAt DateTime @default(now())
+
+  sales                Sale[]
+  financialTransactions FinancialTransaction[]
+
+  @@map("customers")
+}
+
+model Supplier {
+  id        String   @id @default(uuid())
+  name      String
+  document  String?  @unique
+  phone     String?
+  email     String?
+  address   String?
+  createdAt DateTime @default(now())
+
+  purchaseOrders        PurchaseOrder[]
+  financialTransactions FinancialTransaction[]
+
+  @@map("suppliers")
+}
+
+model Sale {
+  id            String        @id @default(uuid())
+  number        Int           @default(autoincrement())
+  customerId    String?
+  userId        String
+  status        SaleStatus    @default(ORCAMENTO)
+  paymentMethod PaymentMethod?
+  subtotal      Decimal       @default(0) @db.Decimal(12, 2)
+  discount      Decimal       @default(0) @db.Decimal(12, 2)
+  total         Decimal       @default(0) @db.Decimal(12, 2)
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  customer Customer? @relation(fields: [customerId], references: [id])
+  user     User      @relation(fields: [userId], references: [id])
+
+  items                 SaleItem[]
+  financialTransactions FinancialTransaction[]
+
+  @@map("sales")
+}
+
+model SaleItem {
+  id         String  @id @default(uuid())
+  saleId     String
+  productId  String
+  quantity   Decimal @db.Decimal(12, 3)
+  unitPrice  Decimal @db.Decimal(12, 2)
+  discount   Decimal @default(0) @db.Decimal(12, 2)
+  total      Decimal @db.Decimal(12, 2)
+
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([saleId])
+  @@map("sale_items")
+}
+
+model PurchaseOrder {
+  id         String              @id @default(uuid())
+  number     Int                 @default(autoincrement())
+  supplierId String
+  userId     String
+  status     PurchaseOrderStatus @default(PENDENTE)
+  subtotal   Decimal             @default(0) @db.Decimal(12, 2)
+  total      Decimal             @default(0) @db.Decimal(12, 2)
+  notes      String?
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  supplier Supplier @relation(fields: [supplierId], references: [id])
+  user     User     @relation(fields: [userId], references: [id])
+
+  items                 PurchaseOrderItem[]
+  financialTransactions FinancialTransaction[]
+
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String  @id @default(uuid())
+  purchaseOrderId String
+  productId       String
+  quantity        Decimal @db.Decimal(12, 3)
+  unitCost        Decimal @db.Decimal(12, 2)
+  total           Decimal @db.Decimal(12, 2)
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product       Product       @relation(fields: [productId], references: [id])
+
+  @@index([purchaseOrderId])
+  @@map("purchase_order_items")
+}
+
+model FinancialCategory {
+  id        String        @id @default(uuid())
+  name      String        @unique
+  type      FinancialType
+  createdAt DateTime      @default(now())
+
+  transactions FinancialTransaction[]
+
+  @@map("financial_categories")
+}
+
+/// Lancamento generico de contas a pagar (PAGAR) ou a receber (RECEBER).
+/// O status "vencido" nao e armazenado: e sempre derivado comparando dueDate
+/// com a data atual para status == PENDENTE, evitando dessincronizacao.
+model FinancialTransaction {
+  id          String          @id @default(uuid())
+  type        FinancialType
+  status      FinancialStatus @default(PENDENTE)
+  categoryId  String?
+  description String
+  amount      Decimal         @db.Decimal(12, 2)
+  dueDate     DateTime
+  paidAt      DateTime?
+
+  counterpartyName String?
+  supplierId       String?
+  customerId       String?
+
+  saleId          String?
+  purchaseOrderId String?
+
+  installmentGroupId String?
+  installmentNumber  Int     @default(1)
+  installmentTotal   Int     @default(1)
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  category      FinancialCategory? @relation(fields: [categoryId], references: [id])
+  supplier      Supplier?          @relation(fields: [supplierId], references: [id])
+  customer      Customer?          @relation(fields: [customerId], references: [id])
+  sale          Sale?              @relation(fields: [saleId], references: [id])
+  purchaseOrder PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
+
+  @@index([type, status])
+  @@index([installmentGroupId])
+  @@map("financial_transactions")
+}
