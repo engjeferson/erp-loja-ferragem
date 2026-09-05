@@ -1,7 +1,12 @@
 import axios from "axios";
 
+const DEFAULT_API_URL =
+  import.meta.env.MODE === "production"
+    ? "https://erp-loja-ferragem-api.onrender.com/api"
+    : "http://localhost:3333/api";
+
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:3333/api",
+  baseURL: import.meta.env.VITE_API_URL ?? DEFAULT_API_URL,
 });
 
 api.interceptors.request.use((config) => {
