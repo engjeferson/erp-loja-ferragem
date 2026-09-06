@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { Role } from "@prisma/client";
+import { CompanySettings, Role } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticate, authorize } from "../../middlewares/auth";
@@ -13,15 +13,37 @@ router.use(authenticate);
 
 const SETTINGS_ID = "default";
 
-async function loadCredentials(): Promise<{
+/**
+ * The SEFAZ Distribuicao DFe webservice enforces its own server-side
+ * throttle: querying it more than once an hour (cStat 656, "Rejeicao:
+ * Consumo Indevido") gets the certificate's IP/session penalized. We
+ * can't lift that limit from our side, so the only real fix is to never
+ * call it more often than that ourselves - this mirrors what makes other
+ * NFe integrations "just work": they respect the cadence, not some
+ * different request shape.
+ */
+const RADAR_MIN_INTERVAL_MS = 60 * 60 * 1000;
+
+function assertRadarCooldownElapsed(settings: CompanySettings | null) {
+  if (!settings?.lastRadarCheckAt) return;
+
+  const elapsedMs = Date.now() - settings.lastRadarCheckAt.getTime();
+  if (elapsedMs >= RADAR_MIN_INTERVAL_MS) return;
+
+  const waitMinutes = Math.ceil((RADAR_MIN_INTERVAL_MS - elapsedMs) / 60_000);
+  throw new AppError(
+    `A SEFAZ permite no maximo 1 consulta por hora ao radar de NF-e. Aguarde mais ${waitMinutes} minuto(s) antes de tentar de novo (isso evita o erro "656 - Consumo Indevido").`,
+    429,
+  );
+}
+
+async function loadCredentials(settings: CompanySettings | null): Promise<{
   credentials: SefazCredentials;
   cnpj: string;
   uf: string;
   ambiente: "PRODUCAO" | "HOMOLOGACAO";
   ultNsu: string;
 }> {
-  const settings = await prisma.companySettings.findUnique({ where: { id: SETTINGS_ID } });
-
   if (!settings?.cnpj || !settings.uf) {
     throw new AppError("Cadastre o CNPJ e a UF da empresa em Configuracoes antes de usar o radar", 422);
   }
@@ -63,7 +85,10 @@ router.post(
   "/radar/check",
   authorize(Role.ADMIN, Role.GERENTE),
   asyncHandler(async (req, res) => {
-    const { credentials, cnpj, uf, ambiente, ultNsu } = await loadCredentials();
+    const settings = await prisma.companySettings.findUnique({ where: { id: SETTINGS_ID } });
+    assertRadarCooldownElapsed(settings);
+
+    const { credentials, cnpj, uf, ambiente, ultNsu } = await loadCredentials(settings);
 
     try {
       const discovery = await checkForNewInvoices(credentials, cnpj, uf, ambiente, ultNsu);

@@ -147,8 +147,15 @@ export function NfeRadar() {
     setImports(importsResponse.data);
   }
 
+  const [now, setNow] = useState(() => Date.now());
+
   useEffect(() => {
     load();
+  }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(interval);
   }, []);
 
   async function handleCheck() {
@@ -197,6 +204,12 @@ export function NfeRadar() {
   const pending = imports.filter((item) => item.status === "PENDENTE");
   const history = imports.filter((item) => item.status !== "PENDENTE");
 
+  const RADAR_MIN_INTERVAL_MS = 60 * 60 * 1000;
+  const lastCheckMs = settings.lastRadarCheckAt ? new Date(settings.lastRadarCheckAt).getTime() : null;
+  const cooldownRemainingMs = lastCheckMs ? RADAR_MIN_INTERVAL_MS - (now - lastCheckMs) : 0;
+  const inCooldown = cooldownRemainingMs > 0;
+  const cooldownMinutes = Math.ceil(cooldownRemainingMs / 60_000);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -204,12 +217,24 @@ export function NfeRadar() {
         <button
           type="button"
           onClick={handleCheck}
-          disabled={!radarReady || checking}
+          disabled={!radarReady || checking || inCooldown}
+          title={inCooldown ? `A SEFAZ permite 1 consulta por hora - aguarde ${cooldownMinutes} min` : undefined}
           className="bg-brand-600 hover:bg-brand-700 text-white text-sm px-4 py-2 rounded disabled:opacity-50"
         >
-          {checking ? "Consultando SEFAZ..." : "Buscar novas notas"}
+          {checking
+            ? "Consultando SEFAZ..."
+            : inCooldown
+              ? `Aguarde ${cooldownMinutes} min`
+              : "Buscar novas notas"}
         </button>
       </div>
+
+      {radarReady && inCooldown && (
+        <div className="bg-amber-50 text-amber-700 text-sm px-4 py-3 rounded">
+          A SEFAZ permite no maximo 1 consulta por hora ao radar de NF-e (para evitar o erro "656 -
+          Consumo Indevido"). Faltam cerca de {cooldownMinutes} minuto(s) para a proxima consulta liberar.
+        </div>
+      )}
 
       {!radarReady && (
         <div className="bg-amber-50 text-amber-700 text-sm px-4 py-3 rounded">
