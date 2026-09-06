@@ -6,7 +6,7 @@ import { authenticate, authorize } from "../../middlewares/auth";
 import { AppError } from "../../utils/AppError";
 import { decryptBuffer, decryptText } from "../../lib/encryption";
 import { checkForNewInvoices, fetchFullInvoice, SefazCredentials } from "../../lib/nfeSefaz";
-import { importNfe } from "../../lib/nfeImporter";
+import { authorizeImport, recordFetchFailure, recordPendingImport, rejectImport } from "../../lib/nfeImporter";
 
 const router = Router();
 router.use(authenticate);
@@ -53,6 +53,12 @@ async function loadCredentials(): Promise<{
   };
 }
 
+/**
+ * The radar only discovers and lists - it never launches anything into
+ * stock or financial by itself. Every key found either becomes a PENDENTE
+ * NfeImport (waiting for a person to authorize or reject) or, if the full
+ * document could not be downloaded, an ERRO entry with nothing to act on.
+ */
 router.post(
   "/radar/check",
   authorize(Role.ADMIN, Role.GERENTE),
@@ -65,20 +71,25 @@ router.post(
       const results: { chaveAcesso: string; status: string; errorMessage?: string }[] = [];
 
       for (const chaveAcesso of discovery.chavesEncontradas) {
-        const alreadyImported = await prisma.nfeImport.findUnique({ where: { chaveAcesso } });
-        if (alreadyImported) {
+        const alreadyKnown = await prisma.nfeImport.findUnique({ where: { chaveAcesso } });
+        if (alreadyKnown) {
           results.push({ chaveAcesso, status: "IGNORADA" });
           continue;
         }
 
         const fullInvoice = await fetchFullInvoice(credentials, cnpj, uf, ambiente, chaveAcesso);
         if (!fullInvoice) {
+          await recordFetchFailure(
+            chaveAcesso,
+            discovery.maxNSU,
+            "Nao foi possivel obter o documento completo junto a SEFAZ",
+          );
           results.push({ chaveAcesso, status: "ERRO", errorMessage: "Nao foi possivel obter o documento completo" });
           continue;
         }
 
-        const outcome = await importNfe(fullInvoice, discovery.maxNSU, req.user!.sub);
-        results.push({ chaveAcesso, status: outcome.status, errorMessage: outcome.errorMessage });
+        await recordPendingImport(fullInvoice, discovery.maxNSU);
+        results.push({ chaveAcesso, status: "PENDENTE" });
       }
 
       await prisma.companySettings.update({
@@ -111,13 +122,33 @@ router.post(
 
 router.get(
   "/imports",
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    const { status } = req.query;
     const imports = await prisma.nfeImport.findMany({
-      include: { supplier: true, purchaseOrder: true },
+      where: status ? { status: status as never } : undefined,
+      include: { supplier: true, purchaseOrder: true, reviewedBy: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
-      take: 100,
+      take: 200,
     });
     res.json(imports);
+  }),
+);
+
+router.post(
+  "/imports/:id/authorize",
+  authorize(Role.ADMIN, Role.GERENTE),
+  asyncHandler(async (req, res) => {
+    const outcome = await authorizeImport(req.params.id, req.user!.sub);
+    res.json(outcome);
+  }),
+);
+
+router.post(
+  "/imports/:id/reject",
+  authorize(Role.ADMIN, Role.GERENTE),
+  asyncHandler(async (req, res) => {
+    await rejectImport(req.params.id, req.user!.sub);
+    res.status(204).send();
   }),
 );
 

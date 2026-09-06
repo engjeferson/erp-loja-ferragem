@@ -62,9 +62,10 @@ model User {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  sales           Sale[]
-  purchaseOrders  PurchaseOrder[]
-  stockMovements  StockMovement[]
+  sales             Sale[]
+  purchaseOrders    PurchaseOrder[]
+  stockMovements    StockMovement[]
+  reviewedNfeImports NfeImport[]
 
   @@map("users")
 }
@@ -339,14 +340,18 @@ model CompanySettings {
 }
 
 enum NfeImportStatus {
+  PENDENTE
   IMPORTADA
+  REJEITADA
   ERRO
-  IGNORADA
 }
 
-/// Log de auditoria de cada NF-e detectada pelo radar: uma linha por chave
-/// de acesso, nunca duplicada (evita reprocessar/relancar estoque 2x para
-/// a mesma nota caso o radar rode de novo sobre o mesmo NSU).
+/// Fila de NF-e detectadas pelo radar. Nenhuma entra em estoque/financeiro
+/// sozinha: o radar so grava aqui (status PENDENTE, com os dados completos
+/// da nota em rawData) e fica esperando um usuario autorizar ou rejeitar
+/// (ver POST /nfe/imports/:id/authorize e /reject). Uma linha por chave de
+/// acesso, nunca duplicada - reexecutar o radar sobre o mesmo NSU nao cria
+/// pendencia repetida nem, uma vez autorizada, relanca estoque duas vezes.
 model NfeImport {
   id              String          @id @default(uuid())
   chaveAcesso     String          @unique
@@ -357,12 +362,22 @@ model NfeImport {
   emitenteNome    String
   valorTotal      Decimal         @db.Decimal(12, 2)
   dataEmissao     DateTime
-  status          NfeImportStatus @default(IMPORTADA)
+  status          NfeImportStatus @default(PENDENTE)
   errorMessage    String?
-  createdAt       DateTime        @default(now())
+  /// Snapshot da NF-e completa (itens, duplicatas) obtida da SEFAZ no momento
+  /// da deteccao - permite autorizar depois sem consultar a SEFAZ de novo.
+  /// Nulo quando o radar encontrou a chave mas nao conseguiu baixar o
+  /// documento completo (fica como ERRO, sem nada para autorizar).
+  rawData Json?
+
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+
+  createdAt DateTime @default(now())
 
   supplier      Supplier?      @relation(fields: [supplierId], references: [id])
   purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  reviewedBy    User?          @relation(fields: [reviewedByUserId], references: [id])
 
   @@index([status])
   @@map("nfe_imports")

@@ -152,7 +152,22 @@ export interface CompanySettings {
   lastRadarError?: string | null;
 }
 
-export type NfeImportStatus = "IMPORTADA" | "ERRO" | "IGNORADA";
+export type NfeImportStatus = "PENDENTE" | "IMPORTADA" | "REJEITADA" | "ERRO";
+
+export interface NfeItemPreview {
+  codigoProduto: string;
+  descricao: string;
+  unidadeComercial: string;
+  quantidadeComercial: number;
+  valorUnitarioComercial: number;
+  valorTotal: number;
+}
+
+export interface NfeDuplicataPreview {
+  numero: string;
+  vencimento: string;
+  valor: number;
+}
 
 export interface NfeImport {
   id: string;
@@ -166,6 +181,11 @@ export interface NfeImport {
   createdAt: string;
   supplier?: Supplier | null;
   purchaseOrder?: PurchaseOrder | null;
+  reviewedBy?: { name: string } | null;
+  rawData?: {
+    itens: NfeItemPreview[];
+    duplicatas: NfeDuplicataPreview[];
+  } | null;
 }
 
 export interface DashboardData {

@@ -5,16 +5,131 @@ import { CompanySettings, NfeImport } from "../types";
 import { formatCurrency, formatDate } from "../utils/format";
 
 const STATUS_LABEL: Record<string, string> = {
-  IMPORTADA: "Importada",
+  PENDENTE: "Pendente de autorizacao",
+  IMPORTADA: "Autorizada e lancada",
+  REJEITADA: "Rejeitada",
   ERRO: "Erro",
-  IGNORADA: "Ja processada",
 };
 
 const STATUS_CLASS: Record<string, string> = {
+  PENDENTE: "text-amber-600",
   IMPORTADA: "text-emerald-600",
+  REJEITADA: "text-slate-400",
   ERRO: "text-red-600",
-  IGNORADA: "text-slate-400",
 };
+
+function PendingRow({
+  item,
+  onAuthorize,
+  onReject,
+}: {
+  item: NfeImport;
+  onAuthorize: (id: string) => void;
+  onReject: (id: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function handleAuthorize() {
+    if (!window.confirm("Autorizar esta nota? Isso vai lancar entrada de estoque e conta a pagar.")) return;
+    setBusy(true);
+    try {
+      await onAuthorize(item.id);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleReject() {
+    if (!window.confirm("Rejeitar esta nota? Ela nao entrara em estoque nem financeiro.")) return;
+    setBusy(true);
+    try {
+      await onReject(item.id);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="border border-amber-200 bg-amber-50 rounded-lg">
+      <div className="flex items-center justify-between px-4 py-3">
+        <div>
+          <p className="text-sm font-medium text-slate-800">{item.emitenteNome}</p>
+          <p className="text-xs text-slate-500">
+            CNPJ {item.emitenteCnpj} - Emissao {formatDate(item.dataEmissao)} - {formatCurrency(item.valorTotal)}
+          </p>
+        </div>
+        <div className="flex items-center gap-3 text-sm">
+          <button type="button" onClick={() => setExpanded((v) => !v)} className="text-slate-600 hover:underline">
+            {expanded ? "Ocultar itens" : "Ver itens"}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={handleReject}
+            className="text-red-600 hover:underline disabled:opacity-50"
+          >
+            Rejeitar
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={handleAuthorize}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded disabled:opacity-50"
+          >
+            Autorizar
+          </button>
+        </div>
+      </div>
+
+      {expanded && item.rawData && (
+        <div className="border-t border-amber-200 px-4 py-3 space-y-3">
+          <table className="w-full text-xs">
+            <thead className="text-slate-500 text-left">
+              <tr>
+                <th className="py-1">Produto</th>
+                <th className="py-1">Qtd</th>
+                <th className="py-1">Unid.</th>
+                <th className="py-1">Valor unit.</th>
+                <th className="py-1">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {item.rawData.itens.map((prod, index) => (
+                <tr key={index} className="border-t border-amber-100">
+                  <td className="py-1">{prod.descricao}</td>
+                  <td className="py-1">{prod.quantidadeComercial}</td>
+                  <td className="py-1">{prod.unidadeComercial}</td>
+                  <td className="py-1">{formatCurrency(prod.valorUnitarioComercial)}</td>
+                  <td className="py-1">{formatCurrency(prod.valorTotal)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {item.rawData.duplicatas.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-slate-600 mb-1">Parcelas (duplicatas da nota)</p>
+              <ul className="text-xs text-slate-600 space-y-0.5">
+                {item.rawData.duplicatas.map((dup, index) => (
+                  <li key={index}>
+                    Parcela {dup.numero || index + 1} - vencimento {formatDate(dup.vencimento)} -{" "}
+                    {formatCurrency(dup.valor)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <p className="text-xs text-amber-700">
+            Produtos novos criados na autorizacao entram com preco de venda igual ao de custo -
+            revise depois em Produtos.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function NfeRadar() {
   const [settings, setSettings] = useState<CompanySettings | null>(null);
@@ -43,10 +158,10 @@ export function NfeRadar() {
     try {
       const response = await api.post("/nfe/radar/check");
       const { notasEncontradas, resultados } = response.data;
-      const importadas = resultados.filter((r: { status: string }) => r.status === "IMPORTADA").length;
+      const pendentes = resultados.filter((r: { status: string }) => r.status === "PENDENTE").length;
       const erros = resultados.filter((r: { status: string }) => r.status === "ERRO").length;
       setSummary(
-        `${notasEncontradas} nota(s) encontrada(s) - ${importadas} importada(s), ${erros} com erro.`,
+        `${notasEncontradas} nota(s) encontrada(s) - ${pendentes} aguardando autorizacao, ${erros} com erro.`,
       );
       await load();
     } catch (err) {
@@ -56,11 +171,31 @@ export function NfeRadar() {
     }
   }
 
+  async function handleAuthorize(id: string) {
+    try {
+      await api.post(`/nfe/imports/${id}/authorize`);
+      await load();
+    } catch (err) {
+      window.alert(getApiErrorMessage(err));
+    }
+  }
+
+  async function handleReject(id: string) {
+    try {
+      await api.post(`/nfe/imports/${id}/reject`);
+      await load();
+    } catch (err) {
+      window.alert(getApiErrorMessage(err));
+    }
+  }
+
   if (!settings) {
     return <p className="text-slate-500">Carregando...</p>;
   }
 
   const radarReady = settings.hasCertificate && settings.cnpj && settings.uf;
+  const pending = imports.filter((item) => item.status === "PENDENTE");
+  const history = imports.filter((item) => item.status !== "PENDENTE");
 
   return (
     <div className="space-y-6">
@@ -98,8 +233,21 @@ export function NfeRadar() {
         {settings.lastRadarError && <p className="text-red-600">Erro: {settings.lastRadarError}</p>}
       </div>
 
+      <div className="space-y-3">
+        <h2 className="font-semibold text-slate-800">
+          Aguardando autorizacao {pending.length > 0 && `(${pending.length})`}
+        </h2>
+        {pending.length === 0 ? (
+          <p className="text-sm text-slate-400">Nenhuma nota pendente no momento.</p>
+        ) : (
+          pending.map((item) => (
+            <PendingRow key={item.id} item={item} onAuthorize={handleAuthorize} onReject={handleReject} />
+          ))
+        )}
+      </div>
+
       <div className="bg-white rounded-lg shadow-sm overflow-x-auto">
-        <h2 className="font-semibold text-slate-800 px-4 pt-4">Historico de notas detectadas</h2>
+        <h2 className="font-semibold text-slate-800 px-4 pt-4">Historico</h2>
         <table className="w-full text-sm mt-2">
           <thead className="bg-slate-50 text-slate-500 text-left">
             <tr>
@@ -108,17 +256,18 @@ export function NfeRadar() {
               <th className="px-4 py-2">Valor</th>
               <th className="px-4 py-2">Emissao</th>
               <th className="px-4 py-2">Status</th>
+              <th className="px-4 py-2">Revisado por</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {imports.length === 0 && (
+            {history.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-slate-400">
-                  Nenhuma nota detectada ainda
+                <td colSpan={6} className="px-4 py-6 text-center text-slate-400">
+                  Nenhuma nota no historico ainda
                 </td>
               </tr>
             )}
-            {imports.map((item) => (
+            {history.map((item) => (
               <tr key={item.id}>
                 <td className="px-4 py-2 font-mono text-xs">{item.chaveAcesso}</td>
                 <td className="px-4 py-2">{item.emitenteNome}</td>
@@ -130,6 +279,7 @@ export function NfeRadar() {
                     <span className="block text-xs text-slate-400 font-normal">{item.errorMessage}</span>
                   )}
                 </td>
+                <td className="px-4 py-2 text-slate-500">{item.reviewedBy?.name ?? "-"}</td>
               </tr>
             ))}
           </tbody>
@@ -137,7 +287,7 @@ export function NfeRadar() {
       </div>
 
       <p className="text-sm text-slate-500">
-        Produtos criados automaticamente pelo radar entram com preco de venda igual ao de custo -
+        Produtos criados automaticamente na autorizacao entram com preco de venda igual ao de custo -
         confira a lista de{" "}
         <Link to="/produtos" className="underline">
           produtos
