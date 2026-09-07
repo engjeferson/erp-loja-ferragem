@@ -31,9 +31,15 @@ export function authenticate(req: Request, _res: Response, next: NextFunction) {
 
   try {
     const payload = jwt.verify(token, env.jwtSecret) as AuthPayload;
+    if (!payload.sub || !payload.companyId) {
+      // Token emitido antes do multi-tenant (sem companyId) - forcar novo login
+      // em vez de deixar as rotas quebrarem com companyId undefined.
+      throw new AppError("Sessao expirada, faca login novamente", 401);
+    }
     req.user = payload;
     next();
-  } catch {
+  } catch (error) {
+    if (error instanceof AppError) throw error;
     throw new AppError("Token de autenticacao invalido ou expirado", 401);
   }
 }
