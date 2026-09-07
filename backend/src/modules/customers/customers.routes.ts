@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../../config/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticate } from "../../middlewares/auth";
+import { AppError } from "../../utils/AppError";
 
 const router = Router();
 router.use(authenticate);
@@ -19,15 +20,19 @@ router.get(
   "/",
   asyncHandler(async (req, res) => {
     const { search } = req.query;
+    const companyId = req.user!.companyId;
     const customers = await prisma.customer.findMany({
-      where: search
-        ? {
-            OR: [
-              { name: { contains: String(search), mode: "insensitive" } },
-              { document: { contains: String(search), mode: "insensitive" } },
-            ],
-          }
-        : undefined,
+      where: {
+        companyId,
+        ...(search
+          ? {
+              OR: [
+                { name: { contains: String(search), mode: "insensitive" } },
+                { document: { contains: String(search), mode: "insensitive" } },
+              ],
+            }
+          : {}),
+      },
       orderBy: { name: "asc" },
     });
     res.json(customers);
@@ -37,7 +42,10 @@ router.get(
 router.get(
   "/:id",
   asyncHandler(async (req, res) => {
-    const customer = await prisma.customer.findUniqueOrThrow({ where: { id: req.params.id } });
+    const customer = await prisma.customer.findFirst({
+      where: { id: req.params.id, companyId: req.user!.companyId },
+    });
+    if (!customer) throw new AppError("Cliente nao encontrado", 404);
     res.json(customer);
   }),
 );
@@ -46,7 +54,9 @@ router.post(
   "/",
   asyncHandler(async (req, res) => {
     const data = customerSchema.parse(req.body);
-    const customer = await prisma.customer.create({ data });
+    const customer = await prisma.customer.create({
+      data: { ...data, companyId: req.user!.companyId },
+    });
     res.status(201).json(customer);
   }),
 );
@@ -55,7 +65,12 @@ router.patch(
   "/:id",
   asyncHandler(async (req, res) => {
     const data = customerSchema.partial().parse(req.body);
-    const customer = await prisma.customer.update({ where: { id: req.params.id }, data });
+    const existing = await prisma.customer.findFirst({
+      where: { id: req.params.id, companyId: req.user!.companyId },
+    });
+    if (!existing) throw new AppError("Cliente nao encontrado", 404);
+
+    const customer = await prisma.customer.update({ where: { id: existing.id }, data });
     res.json(customer);
   }),
 );
@@ -63,7 +78,12 @@ router.patch(
 router.delete(
   "/:id",
   asyncHandler(async (req, res) => {
-    await prisma.customer.delete({ where: { id: req.params.id } });
+    const existing = await prisma.customer.findFirst({
+      where: { id: req.params.id, companyId: req.user!.companyId },
+    });
+    if (!existing) throw new AppError("Cliente nao encontrado", 404);
+
+    await prisma.customer.delete({ where: { id: existing.id } });
     res.status(204).send();
   }),
 );

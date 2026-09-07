@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   FinancialStatus,
   FinancialType,
+  Prisma,
   PaymentMethod,
   SaleStatus,
   StockMovementType,
@@ -12,6 +13,8 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticate } from "../../middlewares/auth";
 import { AppError } from "../../utils/AppError";
 import { buildInstallments } from "../../utils/installments";
+
+type Tx = Prisma.TransactionClient;
 
 const router = Router();
 router.use(authenticate);
@@ -41,12 +44,43 @@ function calculateTotals(items: z.infer<typeof saleItemSchema>[]) {
   return { subtotal, discount, total: subtotal - discount };
 }
 
+/** Guards against a request smuggling in a productId/customerId that
+ * belongs to a different company - ids are opaque UUIDs, so without this
+ * check one tenant could reference (and leak data about) another's rows. */
+async function assertBelongToCompany(
+  tx: Tx,
+  companyId: string,
+  productIds: string[],
+  customerId?: string,
+) {
+  const uniqueProductIds = [...new Set(productIds)];
+  const ownedProducts = await tx.product.count({
+    where: { id: { in: uniqueProductIds }, companyId },
+  });
+  if (ownedProducts !== uniqueProductIds.length) {
+    throw new AppError("Um ou mais produtos informados nao pertencem a esta empresa", 422);
+  }
+
+  if (customerId) {
+    const customer = await tx.customer.findFirst({ where: { id: customerId, companyId } });
+    if (!customer) throw new AppError("Cliente informado nao pertence a esta empresa", 422);
+  }
+}
+
+async function nextSaleNumber(tx: Tx, companyId: string): Promise<number> {
+  const result = await tx.sale.aggregate({ where: { companyId }, _max: { number: true } });
+  return (result._max.number ?? 0) + 1;
+}
+
 router.get(
   "/",
   asyncHandler(async (req, res) => {
     const { status } = req.query;
     const sales = await prisma.sale.findMany({
-      where: status ? { status: status as SaleStatus } : undefined,
+      where: {
+        companyId: req.user!.companyId,
+        ...(status ? { status: status as SaleStatus } : {}),
+      },
       include: { customer: true, user: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
     });
@@ -57,8 +91,8 @@ router.get(
 router.get(
   "/:id",
   asyncHandler(async (req, res) => {
-    const sale = await prisma.sale.findUnique({
-      where: { id: req.params.id },
+    const sale = await prisma.sale.findFirst({
+      where: { id: req.params.id, companyId: req.user!.companyId },
       include: {
         customer: true,
         user: { select: { name: true } },
@@ -76,26 +110,38 @@ router.post(
   asyncHandler(async (req, res) => {
     const data = createSaleSchema.parse(req.body);
     const totals = calculateTotals(data.items);
+    const companyId = req.user!.companyId;
 
-    const sale = await prisma.sale.create({
-      data: {
-        customerId: data.customerId,
-        userId: req.user!.sub,
-        notes: data.notes,
-        subtotal: totals.subtotal,
-        discount: totals.discount,
-        total: totals.total,
-        items: {
-          create: data.items.map((item) => ({
-            productId: item.productId,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            discount: item.discount,
-            total: item.quantity * item.unitPrice - item.discount,
-          })),
+    const sale = await prisma.$transaction(async (tx) => {
+      await assertBelongToCompany(
+        tx,
+        companyId,
+        data.items.map((item) => item.productId),
+        data.customerId,
+      );
+
+      return tx.sale.create({
+        data: {
+          companyId,
+          number: await nextSaleNumber(tx, companyId),
+          customerId: data.customerId,
+          userId: req.user!.sub,
+          notes: data.notes,
+          subtotal: totals.subtotal,
+          discount: totals.discount,
+          total: totals.total,
+          items: {
+            create: data.items.map((item) => ({
+              productId: item.productId,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              discount: item.discount,
+              total: item.quantity * item.unitPrice - item.discount,
+            })),
+          },
         },
-      },
-      include: { items: true },
+        include: { items: true },
+      });
     });
 
     res.status(201).json(sale);
@@ -106,15 +152,23 @@ router.patch(
   "/:id",
   asyncHandler(async (req, res) => {
     const data = createSaleSchema.partial().parse(req.body);
+    const companyId = req.user!.companyId;
 
     const sale = await prisma.$transaction(async (tx) => {
-      const existing = await tx.sale.findUnique({ where: { id: req.params.id } });
+      const existing = await tx.sale.findFirst({ where: { id: req.params.id, companyId } });
       if (!existing) throw new AppError("Venda nao encontrada", 404);
       if (existing.status !== SaleStatus.ORCAMENTO) {
         throw new AppError("Apenas orcamentos podem ser editados", 422);
       }
 
       if (data.items) {
+        await assertBelongToCompany(
+          tx,
+          companyId,
+          data.items.map((item) => item.productId),
+          data.customerId,
+        );
+
         const totals = calculateTotals(data.items);
         await tx.saleItem.deleteMany({ where: { saleId: existing.id } });
         return tx.sale.update({
@@ -139,6 +193,10 @@ router.patch(
         });
       }
 
+      if (data.customerId) {
+        await assertBelongToCompany(tx, companyId, [], data.customerId);
+      }
+
       return tx.sale.update({
         where: { id: existing.id },
         data: { customerId: data.customerId, notes: data.notes },
@@ -154,10 +212,11 @@ router.post(
   "/:id/confirm",
   asyncHandler(async (req, res) => {
     const { paymentMethod, installments, firstDueDate } = confirmSaleSchema.parse(req.body);
+    const companyId = req.user!.companyId;
 
     const sale = await prisma.$transaction(async (tx) => {
-      const existing = await tx.sale.findUnique({
-        where: { id: req.params.id },
+      const existing = await tx.sale.findFirst({
+        where: { id: req.params.id, companyId },
         include: { items: true },
       });
       if (!existing) throw new AppError("Venda nao encontrada", 404);
@@ -166,7 +225,9 @@ router.post(
       }
 
       for (const item of existing.items) {
-        const product = await tx.product.findUniqueOrThrow({ where: { id: item.productId } });
+        const product = await tx.product.findFirstOrThrow({
+          where: { id: item.productId, companyId },
+        });
         const currentStock = Number(product.stockQuantity);
         const quantity = Number(item.quantity);
 
@@ -207,6 +268,7 @@ router.post(
 
       await tx.financialTransaction.createMany({
         data: installmentPlans.map((plan) => ({
+          companyId,
           type: FinancialType.RECEBER,
           status: isInstantPayment ? FinancialStatus.PAGO : FinancialStatus.PENDENTE,
           description: `Venda #${existing.number}${plan.installmentTotal > 1 ? ` (parcela ${plan.installmentNumber}/${plan.installmentTotal})` : ""}`,
@@ -235,9 +297,11 @@ router.post(
 router.post(
   "/:id/cancel",
   asyncHandler(async (req, res) => {
+    const companyId = req.user!.companyId;
+
     const sale = await prisma.$transaction(async (tx) => {
-      const existing = await tx.sale.findUnique({
-        where: { id: req.params.id },
+      const existing = await tx.sale.findFirst({
+        where: { id: req.params.id, companyId },
         include: { items: true },
       });
       if (!existing) throw new AppError("Venda nao encontrada", 404);

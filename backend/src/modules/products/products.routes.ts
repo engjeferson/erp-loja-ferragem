@@ -31,9 +31,11 @@ router.get(
   "/",
   asyncHandler(async (req, res) => {
     const { search, lowStock } = req.query;
+    const companyId = req.user!.companyId;
 
     const products = await prisma.product.findMany({
       where: {
+        companyId,
         active: true,
         ...(search
           ? {
@@ -61,8 +63,8 @@ router.get(
 router.get(
   "/:id",
   asyncHandler(async (req, res) => {
-    const product = await prisma.product.findUnique({
-      where: { id: req.params.id },
+    const product = await prisma.product.findFirst({
+      where: { id: req.params.id, companyId: req.user!.companyId },
       include: { category: true, unit: true },
     });
     if (!product) throw new AppError("Produto nao encontrado", 404);
@@ -74,7 +76,9 @@ router.post(
   "/",
   asyncHandler(async (req, res) => {
     const data = productSchema.parse(req.body);
-    const product = await prisma.product.create({ data });
+    const product = await prisma.product.create({
+      data: { ...data, companyId: req.user!.companyId },
+    });
     res.status(201).json(product);
   }),
 );
@@ -83,7 +87,12 @@ router.patch(
   "/:id",
   asyncHandler(async (req, res) => {
     const data = productSchema.partial().parse(req.body);
-    const product = await prisma.product.update({ where: { id: req.params.id }, data });
+    const existing = await prisma.product.findFirst({
+      where: { id: req.params.id, companyId: req.user!.companyId },
+    });
+    if (!existing) throw new AppError("Produto nao encontrado", 404);
+
+    const product = await prisma.product.update({ where: { id: existing.id }, data });
     res.json(product);
   }),
 );
@@ -91,7 +100,12 @@ router.patch(
 router.delete(
   "/:id",
   asyncHandler(async (req, res) => {
-    await prisma.product.update({ where: { id: req.params.id }, data: { active: false } });
+    const existing = await prisma.product.findFirst({
+      where: { id: req.params.id, companyId: req.user!.companyId },
+    });
+    if (!existing) throw new AppError("Produto nao encontrado", 404);
+
+    await prisma.product.update({ where: { id: existing.id }, data: { active: false } });
     res.status(204).send();
   }),
 );
@@ -101,9 +115,10 @@ router.post(
   asyncHandler(async (req, res) => {
     const { quantity, reason } = stockAdjustmentSchema.parse(req.body);
     const productId = req.params.id;
+    const companyId = req.user!.companyId;
 
     const product = await prisma.$transaction(async (tx) => {
-      const current = await tx.product.findUnique({ where: { id: productId } });
+      const current = await tx.product.findFirst({ where: { id: productId, companyId } });
       if (!current) throw new AppError("Produto nao encontrado", 404);
 
       const newQuantity = Number(current.stockQuantity) + quantity;
@@ -134,8 +149,13 @@ router.post(
 router.get(
   "/:id/movements",
   asyncHandler(async (req, res) => {
+    const product = await prisma.product.findFirst({
+      where: { id: req.params.id, companyId: req.user!.companyId },
+    });
+    if (!product) throw new AppError("Produto nao encontrado", 404);
+
     const movements = await prisma.stockMovement.findMany({
-      where: { productId: req.params.id },
+      where: { productId: product.id },
       include: { user: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
     });

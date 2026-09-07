@@ -9,7 +9,8 @@ router.use(authenticate);
 
 router.get(
   "/",
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    const companyId = req.user!.companyId;
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
@@ -26,30 +27,30 @@ router.get(
       recentSales,
     ] = await Promise.all([
       prisma.sale.aggregate({
-        where: { status: SaleStatus.CONFIRMADA, createdAt: { gte: startOfDay } },
+        where: { companyId, status: SaleStatus.CONFIRMADA, createdAt: { gte: startOfDay } },
         _sum: { total: true },
         _count: true,
       }),
       prisma.sale.aggregate({
-        where: { status: SaleStatus.CONFIRMADA, createdAt: { gte: startOfMonth } },
+        where: { companyId, status: SaleStatus.CONFIRMADA, createdAt: { gte: startOfMonth } },
         _sum: { total: true },
         _count: true,
       }),
       prisma.$queryRaw<
         { id: string; name: string; stockQuantity: number; minStockQuantity: number }[]
       >`SELECT id, name, "stockQuantity", "minStockQuantity" FROM products
-        WHERE active = true AND "stockQuantity" <= "minStockQuantity"
+        WHERE active = true AND "stockQuantity" <= "minStockQuantity" AND "companyId" = ${companyId}
         ORDER BY name ASC LIMIT 10`,
       prisma.financialTransaction.aggregate({
-        where: { type: FinancialType.RECEBER, status: FinancialStatus.PENDENTE },
+        where: { companyId, type: FinancialType.RECEBER, status: FinancialStatus.PENDENTE },
         _sum: { amount: true },
       }),
       prisma.financialTransaction.aggregate({
-        where: { type: FinancialType.PAGAR, status: FinancialStatus.PENDENTE },
+        where: { companyId, type: FinancialType.PAGAR, status: FinancialStatus.PENDENTE },
         _sum: { amount: true },
       }),
       prisma.sale.findMany({
-        where: { status: SaleStatus.CONFIRMADA },
+        where: { companyId, status: SaleStatus.CONFIRMADA },
         include: { customer: true },
         orderBy: { createdAt: "desc" },
         take: 5,

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { CompanySettings, Role } from "@prisma/client";
+import { Company, Role } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticate, authorize } from "../../middlewares/auth";
@@ -10,8 +10,6 @@ import { authorizeImport, recordFetchFailure, recordPendingImport, rejectImport 
 
 const router = Router();
 router.use(authenticate);
-
-const SETTINGS_ID = "default";
 
 /**
  * The SEFAZ Distribuicao DFe webservice enforces its own server-side
@@ -24,10 +22,10 @@ const SETTINGS_ID = "default";
  */
 const RADAR_MIN_INTERVAL_MS = 60 * 60 * 1000;
 
-function assertRadarCooldownElapsed(settings: CompanySettings | null) {
-  if (!settings?.lastRadarCheckAt) return;
+function assertRadarCooldownElapsed(company: Company | null) {
+  if (!company?.lastRadarCheckAt) return;
 
-  const elapsedMs = Date.now() - settings.lastRadarCheckAt.getTime();
+  const elapsedMs = Date.now() - company.lastRadarCheckAt.getTime();
   if (elapsedMs >= RADAR_MIN_INTERVAL_MS) return;
 
   const waitMinutes = Math.ceil((RADAR_MIN_INTERVAL_MS - elapsedMs) / 60_000);
@@ -37,41 +35,41 @@ function assertRadarCooldownElapsed(settings: CompanySettings | null) {
   );
 }
 
-async function loadCredentials(settings: CompanySettings | null): Promise<{
+function loadCredentials(company: Company | null): {
   credentials: SefazCredentials;
   cnpj: string;
   uf: string;
   ambiente: "PRODUCAO" | "HOMOLOGACAO";
   ultNsu: string;
-}> {
-  if (!settings?.cnpj || !settings.uf) {
+} {
+  if (!company?.cnpj || !company.uf) {
     throw new AppError("Cadastre o CNPJ e a UF da empresa em Configuracoes antes de usar o radar", 422);
   }
 
-  if (!settings.certificateData || !settings.certificateIv || !settings.certificateAuthTag) {
+  if (!company.certificateData || !company.certificateIv || !company.certificateAuthTag) {
     throw new AppError("Nenhum certificado digital cadastrado em Configuracoes", 422);
   }
-  if (!settings.certificatePassword || !settings.certificatePasswordIv || !settings.certificatePasswordTag) {
+  if (!company.certificatePassword || !company.certificatePasswordIv || !company.certificatePasswordTag) {
     throw new AppError("Certificado cadastrado sem senha associada - reenvie o certificado", 422);
   }
 
   const pfx = decryptBuffer({
-    data: settings.certificateData,
-    iv: settings.certificateIv,
-    authTag: settings.certificateAuthTag,
+    data: company.certificateData,
+    iv: company.certificateIv,
+    authTag: company.certificateAuthTag,
   });
   const passphrase = decryptText({
-    data: settings.certificatePassword,
-    iv: settings.certificatePasswordIv,
-    authTag: settings.certificatePasswordTag,
+    data: company.certificatePassword,
+    iv: company.certificatePasswordIv,
+    authTag: company.certificatePasswordTag,
   });
 
   return {
     credentials: { pfx, passphrase },
-    cnpj: settings.cnpj,
-    uf: settings.uf,
-    ambiente: settings.ambiente,
-    ultNsu: settings.nfeUltNsu,
+    cnpj: company.cnpj,
+    uf: company.uf,
+    ambiente: company.ambiente,
+    ultNsu: company.nfeUltNsu,
   };
 }
 
@@ -85,10 +83,11 @@ router.post(
   "/radar/check",
   authorize(Role.ADMIN, Role.GERENTE),
   asyncHandler(async (req, res) => {
-    const settings = await prisma.companySettings.findUnique({ where: { id: SETTINGS_ID } });
-    assertRadarCooldownElapsed(settings);
+    const companyId = req.user!.companyId;
+    const company = await prisma.company.findUnique({ where: { id: companyId } });
+    assertRadarCooldownElapsed(company);
 
-    const { credentials, cnpj, uf, ambiente, ultNsu } = await loadCredentials(settings);
+    const { credentials, cnpj, uf, ambiente, ultNsu } = loadCredentials(company);
 
     try {
       const discovery = await checkForNewInvoices(credentials, cnpj, uf, ambiente, ultNsu);
@@ -105,6 +104,7 @@ router.post(
         const fullInvoice = await fetchFullInvoice(credentials, cnpj, uf, ambiente, chaveAcesso);
         if (!fullInvoice) {
           await recordFetchFailure(
+            companyId,
             chaveAcesso,
             discovery.maxNSU,
             "Nao foi possivel obter o documento completo junto a SEFAZ",
@@ -113,12 +113,12 @@ router.post(
           continue;
         }
 
-        await recordPendingImport(fullInvoice, discovery.maxNSU);
+        await recordPendingImport(companyId, fullInvoice, discovery.maxNSU);
         results.push({ chaveAcesso, status: "PENDENTE" });
       }
 
-      await prisma.companySettings.update({
-        where: { id: SETTINGS_ID },
+      await prisma.company.update({
+        where: { id: companyId },
         data: {
           nfeUltNsu: discovery.maxNSU,
           nfeMaxNsu: discovery.maxNSU,
@@ -135,8 +135,8 @@ router.post(
     } catch (error) {
       const message = error instanceof AppError ? error.message : "Falha ao consultar a SEFAZ";
 
-      await prisma.companySettings.update({
-        where: { id: SETTINGS_ID },
+      await prisma.company.update({
+        where: { id: companyId },
         data: { lastRadarCheckAt: new Date(), lastRadarError: message },
       });
 
@@ -150,7 +150,10 @@ router.get(
   asyncHandler(async (req, res) => {
     const { status } = req.query;
     const imports = await prisma.nfeImport.findMany({
-      where: status ? { status: status as never } : undefined,
+      where: {
+        companyId: req.user!.companyId,
+        ...(status ? { status: status as never } : {}),
+      },
       include: { supplier: true, purchaseOrder: true, reviewedBy: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
       take: 200,
@@ -163,7 +166,7 @@ router.post(
   "/imports/:id/authorize",
   authorize(Role.ADMIN, Role.GERENTE),
   asyncHandler(async (req, res) => {
-    const outcome = await authorizeImport(req.params.id, req.user!.sub);
+    const outcome = await authorizeImport(req.params.id, req.user!.companyId, req.user!.sub);
     res.json(outcome);
   }),
 );
@@ -172,7 +175,7 @@ router.post(
   "/imports/:id/reject",
   authorize(Role.ADMIN, Role.GERENTE),
   asyncHandler(async (req, res) => {
-    await rejectImport(req.params.id, req.user!.sub);
+    await rejectImport(req.params.id, req.user!.companyId, req.user!.sub);
     res.status(204).send();
   }),
 );

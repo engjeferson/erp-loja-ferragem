@@ -14,27 +14,27 @@ import { NfeCompleta, ItemNfe } from "./nfeSefaz";
 
 type Tx = Prisma.TransactionClient;
 
-async function findOrCreateSupplier(tx: Tx, cnpj: string, nome: string) {
-  const existing = await tx.supplier.findUnique({ where: { document: cnpj } });
+async function findOrCreateSupplier(tx: Tx, companyId: string, cnpj: string, nome: string) {
+  const existing = await tx.supplier.findFirst({ where: { companyId, document: cnpj } });
   if (existing) return existing;
-  return tx.supplier.create({ data: { name: nome, document: cnpj } });
+  return tx.supplier.create({ data: { companyId, name: nome, document: cnpj } });
 }
 
-async function findOrCreateUnit(tx: Tx, rawAbbreviation: string) {
+async function findOrCreateUnit(tx: Tx, companyId: string, rawAbbreviation: string) {
   const abbreviation = rawAbbreviation.trim().toUpperCase().slice(0, 10) || "UN";
   const existing = await tx.unit.findFirst({
-    where: { abbreviation: { equals: abbreviation, mode: "insensitive" } },
+    where: { companyId, abbreviation: { equals: abbreviation, mode: "insensitive" } },
   });
   if (existing) return existing;
-  return tx.unit.create({ data: { name: abbreviation, abbreviation } });
+  return tx.unit.create({ data: { companyId, name: abbreviation, abbreviation } });
 }
 
-async function generateUniqueSku(tx: Tx, productCode: string): Promise<string> {
+async function generateUniqueSku(tx: Tx, companyId: string, productCode: string): Promise<string> {
   const cleaned = productCode.replace(/\s+/g, "").slice(0, 30) || "ITEM";
   let candidate = `NFE-${cleaned}`;
   let suffix = 0;
 
-  while (await tx.product.findUnique({ where: { sku: candidate } })) {
+  while (await tx.product.findFirst({ where: { companyId, sku: candidate } })) {
     suffix += 1;
     candidate = `NFE-${cleaned}-${suffix}`;
   }
@@ -42,16 +42,17 @@ async function generateUniqueSku(tx: Tx, productCode: string): Promise<string> {
   return candidate;
 }
 
-async function findOrCreateProduct(tx: Tx, item: ItemNfe, unitId: string) {
+async function findOrCreateProduct(tx: Tx, companyId: string, item: ItemNfe, unitId: string) {
   const name = item.descricao.trim();
   const existing = await tx.product.findFirst({
-    where: { name: { equals: name, mode: "insensitive" } },
+    where: { companyId, name: { equals: name, mode: "insensitive" } },
   });
   if (existing) return existing;
 
-  const sku = await generateUniqueSku(tx, item.codigoProduto);
+  const sku = await generateUniqueSku(tx, companyId, item.codigoProduto);
   return tx.product.create({
     data: {
+      companyId,
       sku,
       name,
       unitId,
@@ -60,6 +61,11 @@ async function findOrCreateProduct(tx: Tx, item: ItemNfe, unitId: string) {
       needsReview: true,
     },
   });
+}
+
+async function nextPurchaseOrderNumber(tx: Tx, companyId: string): Promise<number> {
+  const result = await tx.purchaseOrder.aggregate({ where: { companyId }, _max: { number: true } });
+  return (result._max.number ?? 0) + 1;
 }
 
 export interface ImportOutcome {
@@ -74,12 +80,17 @@ export interface ImportOutcome {
  * (see authorizeImport) - the radar only discovers and lists, it never
  * decides on its own.
  */
-export async function recordPendingImport(nfe: NfeCompleta, nsu: string): Promise<NfeImport> {
+export async function recordPendingImport(
+  companyId: string,
+  nfe: NfeCompleta,
+  nsu: string,
+): Promise<NfeImport> {
   const existing = await prisma.nfeImport.findUnique({ where: { chaveAcesso: nfe.chaveAcesso } });
   if (existing) return existing;
 
   return prisma.nfeImport.create({
     data: {
+      companyId,
       chaveAcesso: nfe.chaveAcesso,
       nsu,
       emitenteCnpj: nfe.emitenteCnpj,
@@ -98,6 +109,7 @@ export async function recordPendingImport(nfe: NfeCompleta, nsu: string): Promis
  * audit trail entry with no rawData - there is nothing to authorize.
  */
 export async function recordFetchFailure(
+  companyId: string,
   chaveAcesso: string,
   nsu: string,
   errorMessage: string,
@@ -108,6 +120,7 @@ export async function recordFetchFailure(
   try {
     return await prisma.nfeImport.create({
       data: {
+        companyId,
         chaveAcesso,
         nsu,
         emitenteCnpj: "",
@@ -145,10 +158,16 @@ function applyInstallments(nfe: NfeCompleta) {
  * Step 2 of the radar: a person reviewed the pending NfeImport and decided
  * to authorize it. Only now do stock, purchase order and financial records
  * get created - atomically, and atomically with the NfeImport row flipping
- * to IMPORTADA, so a crash mid-way never leaves it re-authorizable.
+ * to IMPORTADA, so a crash mid-way never leaves it re-authorizable. Every
+ * find-or-create below is scoped to companyId, so authorizing a note never
+ * matches (or leaks) another tenant's supplier/product catalog.
  */
-export async function authorizeImport(nfeImportId: string, userId: string): Promise<ImportOutcome> {
-  const pending = await prisma.nfeImport.findUnique({ where: { id: nfeImportId } });
+export async function authorizeImport(
+  nfeImportId: string,
+  companyId: string,
+  userId: string,
+): Promise<ImportOutcome> {
+  const pending = await prisma.nfeImport.findFirst({ where: { id: nfeImportId, companyId } });
   if (!pending) throw new AppError("Nota nao encontrada", 404);
   if (pending.status !== NfeImportStatus.PENDENTE) {
     throw new AppError("Esta nota ja foi autorizada, rejeitada ou nao pode ser processada", 422);
@@ -162,10 +181,12 @@ export async function authorizeImport(nfeImportId: string, userId: string): Prom
 
   try {
     await prisma.$transaction(async (tx) => {
-      const supplier = await findOrCreateSupplier(tx, nfe.emitenteCnpj, nfe.emitenteNome);
+      const supplier = await findOrCreateSupplier(tx, companyId, nfe.emitenteCnpj, nfe.emitenteNome);
 
       const purchaseOrder = await tx.purchaseOrder.create({
         data: {
+          companyId,
+          number: await nextPurchaseOrderNumber(tx, companyId),
           supplierId: supplier.id,
           userId,
           status: PurchaseOrderStatus.RECEBIDA,
@@ -176,8 +197,8 @@ export async function authorizeImport(nfeImportId: string, userId: string): Prom
       });
 
       for (const item of nfe.itens) {
-        const unit = await findOrCreateUnit(tx, item.unidadeComercial);
-        const product = await findOrCreateProduct(tx, item, unit.id);
+        const unit = await findOrCreateUnit(tx, companyId, item.unidadeComercial);
+        const product = await findOrCreateProduct(tx, companyId, item, unit.id);
 
         await tx.purchaseOrderItem.create({
           data: {
@@ -223,6 +244,7 @@ export async function authorizeImport(nfeImportId: string, userId: string): Prom
 
       await tx.financialTransaction.createMany({
         data: installmentsSource.map((installment) => ({
+          companyId,
           type: FinancialType.PAGAR,
           status: FinancialStatus.PENDENTE,
           description: `NF-e ${nfe.numero} - ${nfe.emitenteNome}${
@@ -272,8 +294,8 @@ export async function authorizeImport(nfeImportId: string, userId: string): Prom
 }
 
 /** A person reviewed the pending NfeImport and decided not to launch it. */
-export async function rejectImport(nfeImportId: string, userId: string): Promise<void> {
-  const pending = await prisma.nfeImport.findUnique({ where: { id: nfeImportId } });
+export async function rejectImport(nfeImportId: string, companyId: string, userId: string): Promise<void> {
+  const pending = await prisma.nfeImport.findFirst({ where: { id: nfeImportId, companyId } });
   if (!pending) throw new AppError("Nota nao encontrada", 404);
   if (pending.status !== NfeImportStatus.PENDENTE) {
     throw new AppError("Esta nota ja foi autorizada, rejeitada ou nao pode ser processada", 422);

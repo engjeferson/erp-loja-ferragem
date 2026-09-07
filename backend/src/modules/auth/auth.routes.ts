@@ -19,9 +19,13 @@ router.post(
   asyncHandler(async (req, res) => {
     const { email, password } = loginSchema.parse(req.body);
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await prisma.user.findUnique({ where: { email }, include: { company: true } });
     if (!user || !user.active) {
       throw new AppError("Credenciais invalidas", 401);
+    }
+
+    if (!user.company.active) {
+      throw new AppError("Esta empresa esta desativada. Fale com o suporte.", 403);
     }
 
     const passwordMatches = await bcrypt.compare(password, user.passwordHash);
@@ -29,9 +33,11 @@ router.post(
       throw new AppError("Credenciais invalidas", 401);
     }
 
-    const token = jwt.sign({ sub: user.id, role: user.role }, env.jwtSecret, {
-      expiresIn: env.jwtExpiresIn,
-    } as jwt.SignOptions);
+    const token = jwt.sign(
+      { sub: user.id, role: user.role, companyId: user.companyId },
+      env.jwtSecret,
+      { expiresIn: env.jwtExpiresIn } as jwt.SignOptions,
+    );
 
     res.json({
       token,
@@ -40,6 +46,7 @@ router.post(
         name: user.name,
         email: user.email,
         role: user.role,
+        companyName: user.company.name,
       },
     });
   }),

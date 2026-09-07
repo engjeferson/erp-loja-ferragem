@@ -6,6 +6,7 @@ export interface User {
   email: string;
   role: Role;
   active?: boolean;
+  companyName?: string;
 }
 
 export interface Category {
@@ -137,6 +138,7 @@ export interface FinancialTransaction {
 export type NfeAmbiente = "PRODUCAO" | "HOMOLOGACAO";
 
 export interface CompanySettings {
+  name?: string | null;
   cnpj?: string | null;
   razaoSocial?: string | null;
   uf?: string | null;

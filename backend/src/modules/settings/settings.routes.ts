@@ -17,9 +17,8 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
-const SETTINGS_ID = "default";
-
 const companySchema = z.object({
+  name: z.string().min(2).optional(),
   cnpj: z
     .string()
     .transform((value) => value.replace(/\D/g, ""))
@@ -38,33 +37,26 @@ const certificateUploadSchema = z.object({
   password: z.string().min(1, "Informe a senha do certificado"),
 });
 
-async function getOrCreateSettings() {
-  return prisma.companySettings.upsert({
-    where: { id: SETTINGS_ID },
-    update: {},
-    create: { id: SETTINGS_ID },
-  });
-}
-
 router.get(
   "/company",
-  asyncHandler(async (_req, res) => {
-    const settings = await getOrCreateSettings();
+  asyncHandler(async (req, res) => {
+    const company = await prisma.company.findUniqueOrThrow({ where: { id: req.user!.companyId } });
 
     res.json({
-      cnpj: settings.cnpj,
-      razaoSocial: settings.razaoSocial,
-      uf: settings.uf,
-      ambiente: settings.ambiente,
-      hasCertificate: Boolean(settings.certificateData),
-      certificateFileName: settings.certificateFileName,
-      certificateSubjectCn: settings.certificateSubjectCn,
-      certificateValidTo: settings.certificateValidTo,
-      certificateUploadedAt: settings.certificateUploadedAt,
-      nfeUltNsu: settings.nfeUltNsu,
-      lastRadarCheckAt: settings.lastRadarCheckAt,
-      lastRadarStatus: settings.lastRadarStatus,
-      lastRadarError: settings.lastRadarError,
+      name: company.name,
+      cnpj: company.cnpj,
+      razaoSocial: company.razaoSocial,
+      uf: company.uf,
+      ambiente: company.ambiente,
+      hasCertificate: Boolean(company.certificateData),
+      certificateFileName: company.certificateFileName,
+      certificateSubjectCn: company.certificateSubjectCn,
+      certificateValidTo: company.certificateValidTo,
+      certificateUploadedAt: company.certificateUploadedAt,
+      nfeUltNsu: company.nfeUltNsu,
+      lastRadarCheckAt: company.lastRadarCheckAt,
+      lastRadarStatus: company.lastRadarStatus,
+      lastRadarError: company.lastRadarError,
     });
   }),
 );
@@ -73,18 +65,18 @@ router.put(
   "/company",
   asyncHandler(async (req, res) => {
     const data = companySchema.parse(req.body);
-    await getOrCreateSettings();
 
-    const settings = await prisma.companySettings.update({
-      where: { id: SETTINGS_ID },
+    const company = await prisma.company.update({
+      where: { id: req.user!.companyId },
       data,
     });
 
     res.json({
-      cnpj: settings.cnpj,
-      razaoSocial: settings.razaoSocial,
-      uf: settings.uf,
-      ambiente: settings.ambiente,
+      name: company.name,
+      cnpj: company.cnpj,
+      razaoSocial: company.razaoSocial,
+      uf: company.uf,
+      ambiente: company.ambiente,
     });
   }),
 );
@@ -103,10 +95,8 @@ router.post(
     const encryptedCert = encryptBuffer(req.file.buffer);
     const encryptedPassword = encryptText(password);
 
-    await getOrCreateSettings();
-
-    await prisma.companySettings.update({
-      where: { id: SETTINGS_ID },
+    await prisma.company.update({
+      where: { id: req.user!.companyId },
       data: {
         certificateData: encryptedCert.data,
         certificateIv: encryptedCert.iv,
@@ -131,11 +121,9 @@ router.post(
 
 router.delete(
   "/company/certificate",
-  asyncHandler(async (_req, res) => {
-    await getOrCreateSettings();
-
-    await prisma.companySettings.update({
-      where: { id: SETTINGS_ID },
+  asyncHandler(async (req, res) => {
+    await prisma.company.update({
+      where: { id: req.user!.companyId },
       data: {
         certificateData: null,
         certificateIv: null,

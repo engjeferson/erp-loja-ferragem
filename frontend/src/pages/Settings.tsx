@@ -11,7 +11,7 @@ const UFS = [
 
 export function Settings() {
   const [settings, setSettings] = useState<CompanySettings | null>(null);
-  const [companyForm, setCompanyForm] = useState({ cnpj: "", razaoSocial: "", uf: "", ambiente: "PRODUCAO" as NfeAmbiente });
+  const [companyForm, setCompanyForm] = useState({ name: "", cnpj: "", razaoSocial: "", uf: "", ambiente: "PRODUCAO" as NfeAmbiente });
   const [certPassword, setCertPassword] = useState("");
   const [certFile, setCertFile] = useState<File | null>(null);
   const [savingCompany, setSavingCompany] = useState(false);
@@ -25,6 +25,7 @@ export function Settings() {
     const response = await api.get<CompanySettings>("/settings/company");
     setSettings(response.data);
     setCompanyForm({
+      name: response.data.name ?? "",
       cnpj: response.data.cnpj ?? "",
       razaoSocial: response.data.razaoSocial ?? "",
       uf: response.data.uf ?? "",
@@ -101,6 +102,12 @@ export function Settings() {
               {companyMessage}
             </div>
           )}
+          <input
+            placeholder="Nome da empresa (exibido no menu)"
+            value={companyForm.name}
+            onChange={(e) => setCompanyForm({ ...companyForm, name: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm col-span-2"
+          />
           <input
             placeholder="CNPJ (apenas numeros)"
             value={companyForm.cnpj}

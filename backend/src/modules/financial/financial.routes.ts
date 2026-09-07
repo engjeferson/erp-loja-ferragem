@@ -37,8 +37,11 @@ function withOverdueFlag<T extends { status: FinancialStatus; dueDate: Date }>(t
 
 router.get(
   "/categories",
-  asyncHandler(async (_req, res) => {
-    const categories = await prisma.financialCategory.findMany({ orderBy: { name: "asc" } });
+  asyncHandler(async (req, res) => {
+    const categories = await prisma.financialCategory.findMany({
+      where: { companyId: req.user!.companyId },
+      orderBy: { name: "asc" },
+    });
     res.json(categories);
   }),
 );
@@ -47,7 +50,9 @@ router.post(
   "/categories",
   asyncHandler(async (req, res) => {
     const data = categorySchema.parse(req.body);
-    const category = await prisma.financialCategory.create({ data });
+    const category = await prisma.financialCategory.create({
+      data: { ...data, companyId: req.user!.companyId },
+    });
     res.status(201).json(category);
   }),
 );
@@ -59,6 +64,7 @@ router.get(
 
     const transactions = await prisma.financialTransaction.findMany({
       where: {
+        companyId: req.user!.companyId,
         type: type ? (type as FinancialType) : undefined,
         status: status ? (status as FinancialStatus) : undefined,
         dueDate: {
@@ -78,7 +84,24 @@ router.post(
   "/transactions",
   asyncHandler(async (req, res) => {
     const data = createTransactionSchema.parse(req.body);
-    const transaction = await prisma.financialTransaction.create({ data });
+    const companyId = req.user!.companyId;
+
+    if (data.categoryId) {
+      const category = await prisma.financialCategory.findFirst({
+        where: { id: data.categoryId, companyId },
+      });
+      if (!category) throw new AppError("Categoria informada nao pertence a esta empresa", 422);
+    }
+    if (data.supplierId) {
+      const supplier = await prisma.supplier.findFirst({ where: { id: data.supplierId, companyId } });
+      if (!supplier) throw new AppError("Fornecedor informado nao pertence a esta empresa", 422);
+    }
+    if (data.customerId) {
+      const customer = await prisma.customer.findFirst({ where: { id: data.customerId, companyId } });
+      if (!customer) throw new AppError("Cliente informado nao pertence a esta empresa", 422);
+    }
+
+    const transaction = await prisma.financialTransaction.create({ data: { ...data, companyId } });
     res.status(201).json(withOverdueFlag(transaction));
   }),
 );
@@ -86,8 +109,8 @@ router.post(
 router.post(
   "/transactions/:id/settle",
   asyncHandler(async (req, res) => {
-    const transaction = await prisma.financialTransaction.findUnique({
-      where: { id: req.params.id },
+    const transaction = await prisma.financialTransaction.findFirst({
+      where: { id: req.params.id, companyId: req.user!.companyId },
     });
     if (!transaction) throw new AppError("Lancamento nao encontrado", 404);
     if (transaction.status !== FinancialStatus.PENDENTE) {
@@ -95,7 +118,7 @@ router.post(
     }
 
     const updated = await prisma.financialTransaction.update({
-      where: { id: req.params.id },
+      where: { id: transaction.id },
       data: { status: FinancialStatus.PAGO, paidAt: new Date() },
     });
 
@@ -106,8 +129,8 @@ router.post(
 router.post(
   "/transactions/:id/cancel",
   asyncHandler(async (req, res) => {
-    const transaction = await prisma.financialTransaction.findUnique({
-      where: { id: req.params.id },
+    const transaction = await prisma.financialTransaction.findFirst({
+      where: { id: req.params.id, companyId: req.user!.companyId },
     });
     if (!transaction) throw new AppError("Lancamento nao encontrado", 404);
     if (transaction.status !== FinancialStatus.PENDENTE) {
@@ -115,7 +138,7 @@ router.post(
     }
 
     const updated = await prisma.financialTransaction.update({
-      where: { id: req.params.id },
+      where: { id: transaction.id },
       data: { status: FinancialStatus.CANCELADO },
     });
 
@@ -125,21 +148,23 @@ router.post(
 
 router.get(
   "/summary",
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    const companyId = req.user!.companyId;
     const now = new Date();
 
     const [pendingReceivable, pendingPayable, overdueReceivable, overduePayable] =
       await Promise.all([
         prisma.financialTransaction.aggregate({
-          where: { type: FinancialType.RECEBER, status: FinancialStatus.PENDENTE },
+          where: { companyId, type: FinancialType.RECEBER, status: FinancialStatus.PENDENTE },
           _sum: { amount: true },
         }),
         prisma.financialTransaction.aggregate({
-          where: { type: FinancialType.PAGAR, status: FinancialStatus.PENDENTE },
+          where: { companyId, type: FinancialType.PAGAR, status: FinancialStatus.PENDENTE },
           _sum: { amount: true },
         }),
         prisma.financialTransaction.aggregate({
           where: {
+            companyId,
             type: FinancialType.RECEBER,
             status: FinancialStatus.PENDENTE,
             dueDate: { lt: now },
@@ -148,6 +173,7 @@ router.get(
         }),
         prisma.financialTransaction.aggregate({
           where: {
+            companyId,
             type: FinancialType.PAGAR,
             status: FinancialStatus.PENDENTE,
             dueDate: { lt: now },

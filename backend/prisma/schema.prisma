@@ -52,49 +52,125 @@ enum FinancialStatus {
   CANCELADO
 }
 
-model User {
-  id           String    @id @default(uuid())
-  name         String
-  email        String    @unique
-  passwordHash String
-  role         Role      @default(VENDEDOR)
-  active       Boolean   @default(true)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+enum NfeAmbiente {
+  PRODUCAO
+  HOMOLOGACAO
+}
 
-  sales             Sale[]
-  purchaseOrders    PurchaseOrder[]
-  stockMovements    StockMovement[]
+enum NfeImportStatus {
+  PENDENTE
+  IMPORTADA
+  REJEITADA
+  ERRO
+}
+
+/// Um cliente (loja) do sistema - o "tenant" do multi-tenant. Toda tabela de
+/// dominio (produtos, vendas, financeiro, etc.) pertence a exatamente uma
+/// Company, e cada requisicao autenticada so enxerga registros da propria
+/// empresa (o companyId vem do JWT, nunca do corpo da requisicao). Tambem
+/// carrega a configuracao fiscal/certificado do radar de NF-e dessa empresa
+/// (antigo model CompanySettings, fundido aqui pois e 1:1 com a empresa).
+/// Nao ha cadastro publico: uma Company so e criada manualmente, via
+/// prisma/create-company.ts (ver README).
+model Company {
+  id     String  @id @default(uuid())
+  name   String
+  active Boolean @default(true)
+
+  cnpj        String?     @unique
+  razaoSocial String?
+  uf          String?
+  ambiente    NfeAmbiente @default(PRODUCAO)
+
+  certificateFileName    String?
+  certificateUploadedAt  DateTime?
+  certificateSubjectCn   String?
+  certificateValidTo     DateTime?
+  certificateData        Bytes?
+  certificateIv          Bytes?
+  certificateAuthTag     Bytes?
+  certificatePassword    Bytes?
+  certificatePasswordIv  Bytes?
+  certificatePasswordTag Bytes?
+
+  nfeUltNsu        String    @default("000000000000000")
+  nfeMaxNsu        String    @default("000000000000000")
+  lastRadarCheckAt DateTime?
+  lastRadarStatus  String?
+  lastRadarError   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users                 User[]
+  categories            Category[]
+  units                 Unit[]
+  products              Product[]
+  customers             Customer[]
+  suppliers             Supplier[]
+  sales                 Sale[]
+  purchaseOrders        PurchaseOrder[]
+  financialCategories   FinancialCategory[]
+  financialTransactions FinancialTransaction[]
+  nfeImports            NfeImport[]
+
+  @@map("companies")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  companyId    String
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(VENDEDOR)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company            Company         @relation(fields: [companyId], references: [id])
+  sales              Sale[]
+  purchaseOrders     PurchaseOrder[]
+  stockMovements     StockMovement[]
   reviewedNfeImports NfeImport[]
 
+  @@index([companyId])
   @@map("users")
 }
 
 model Category {
-  id          String    @id @default(uuid())
-  name        String    @unique
+  id          String   @id @default(uuid())
+  companyId   String
+  name        String
   description String?
-  createdAt   DateTime  @default(now())
+  createdAt   DateTime @default(now())
 
+  company  Company   @relation(fields: [companyId], references: [id])
   products Product[]
 
+  @@unique([companyId, name])
   @@map("categories")
 }
 
 model Unit {
   id           String @id @default(uuid())
-  name         String @unique
-  abbreviation String @unique
+  companyId    String
+  name         String
+  abbreviation String
 
+  company  Company   @relation(fields: [companyId], references: [id])
   products Product[]
 
+  @@unique([companyId, name])
+  @@unique([companyId, abbreviation])
   @@map("units")
 }
 
 model Product {
   id               String   @id @default(uuid())
-  sku              String   @unique
-  barcode          String?  @unique
+  companyId        String
+  sku              String
+  barcode          String?
   name             String
   description      String?
   categoryId       String?
@@ -112,6 +188,7 @@ model Product {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
+  company  Company   @relation(fields: [companyId], references: [id])
   category Category? @relation(fields: [categoryId], references: [id])
   unit     Unit      @relation(fields: [unitId], references: [id])
 
@@ -119,7 +196,9 @@ model Product {
   saleItems          SaleItem[]
   purchaseOrderItems PurchaseOrderItem[]
 
-  @@index([categoryId])
+  @@unique([companyId, sku])
+  @@unique([companyId, barcode])
+  @@index([companyId, categoryId])
   @@map("products")
 }
 
@@ -143,55 +222,67 @@ model StockMovement {
 
 model Customer {
   id        String   @id @default(uuid())
+  companyId String
   name      String
-  document  String?  @unique
+  document  String?
   phone     String?
   email     String?
   address   String?
   createdAt DateTime @default(now())
 
-  sales                Sale[]
+  company               Company                @relation(fields: [companyId], references: [id])
+  sales                 Sale[]
   financialTransactions FinancialTransaction[]
 
+  @@unique([companyId, document])
   @@map("customers")
 }
 
 model Supplier {
   id        String   @id @default(uuid())
+  companyId String
   name      String
-  document  String?  @unique
+  document  String?
   phone     String?
   email     String?
   address   String?
   createdAt DateTime @default(now())
 
+  company               Company                @relation(fields: [companyId], references: [id])
   purchaseOrders        PurchaseOrder[]
   financialTransactions FinancialTransaction[]
   nfeImports            NfeImport[]
 
+  @@unique([companyId, document])
   @@map("suppliers")
 }
 
 model Sale {
-  id            String        @id @default(uuid())
-  number        Int           @default(autoincrement())
+  id            String         @id @default(uuid())
+  companyId     String
+  /// Sequencial por empresa (nao um autoincrement global) - calculado na
+  /// aplicacao ao confirmar, para cada cliente ter sua propria contagem
+  /// "#1, #2, ..." em vez de herdar numeros de outras empresas.
+  number        Int
   customerId    String?
   userId        String
-  status        SaleStatus    @default(ORCAMENTO)
+  status        SaleStatus     @default(ORCAMENTO)
   paymentMethod PaymentMethod?
-  subtotal      Decimal       @default(0) @db.Decimal(12, 2)
-  discount      Decimal       @default(0) @db.Decimal(12, 2)
-  total         Decimal       @default(0) @db.Decimal(12, 2)
+  subtotal      Decimal        @default(0) @db.Decimal(12, 2)
+  discount      Decimal        @default(0) @db.Decimal(12, 2)
+  total         Decimal        @default(0) @db.Decimal(12, 2)
   notes         String?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
 
+  company  Company   @relation(fields: [companyId], references: [id])
   customer Customer? @relation(fields: [customerId], references: [id])
   user     User      @relation(fields: [userId], references: [id])
 
   items                 SaleItem[]
   financialTransactions FinancialTransaction[]
 
+  @@unique([companyId, number])
   @@map("sales")
 }
 
@@ -213,7 +304,9 @@ model SaleItem {
 
 model PurchaseOrder {
   id         String              @id @default(uuid())
-  number     Int                 @default(autoincrement())
+  companyId  String
+  /// Sequencial por empresa - ver comentario em Sale.number.
+  number     Int
   supplierId String
   userId     String
   status     PurchaseOrderStatus @default(PENDENTE)
@@ -223,6 +316,7 @@ model PurchaseOrder {
   createdAt  DateTime            @default(now())
   updatedAt  DateTime            @updatedAt
 
+  company  Company  @relation(fields: [companyId], references: [id])
   supplier Supplier @relation(fields: [supplierId], references: [id])
   user     User     @relation(fields: [userId], references: [id])
 
@@ -230,6 +324,7 @@ model PurchaseOrder {
   financialTransactions FinancialTransaction[]
   nfeImport             NfeImport?
 
+  @@unique([companyId, number])
   @@map("purchase_orders")
 }
 
@@ -250,12 +345,15 @@ model PurchaseOrderItem {
 
 model FinancialCategory {
   id        String        @id @default(uuid())
-  name      String        @unique
+  companyId String
+  name      String
   type      FinancialType
   createdAt DateTime      @default(now())
 
+  company      Company                 @relation(fields: [companyId], references: [id])
   transactions FinancialTransaction[]
 
+  @@unique([companyId, name])
   @@map("financial_categories")
 }
 
@@ -264,6 +362,7 @@ model FinancialCategory {
 /// com a data atual para status == PENDENTE, evitando dessincronizacao.
 model FinancialTransaction {
   id          String          @id @default(uuid())
+  companyId   String
   type        FinancialType
   status      FinancialStatus @default(PENDENTE)
   categoryId  String?
@@ -287,63 +386,16 @@ model FinancialTransaction {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  company       Company            @relation(fields: [companyId], references: [id])
   category      FinancialCategory? @relation(fields: [categoryId], references: [id])
   supplier      Supplier?          @relation(fields: [supplierId], references: [id])
   customer      Customer?          @relation(fields: [customerId], references: [id])
   sale          Sale?              @relation(fields: [saleId], references: [id])
   purchaseOrder PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
 
-  @@index([type, status])
+  @@index([companyId, type, status])
   @@index([installmentGroupId])
   @@map("financial_transactions")
-}
-
-enum NfeAmbiente {
-  PRODUCAO
-  HOMOLOGACAO
-}
-
-/// Configuracao fiscal da empresa: dados do CNPJ e o certificado digital A1
-/// usado para autenticar (mTLS) no webservice de Distribuicao DFe da SEFAZ.
-/// O arquivo do certificado e a senha nunca sao gravados em texto plano -
-/// ambos passam por AES-256-GCM (ver src/lib/encryption.ts) com a chave
-/// vinda de ENCRYPTION_KEY (variavel de ambiente, nunca fica no banco).
-/// Linha unica (singleton) - sempre acessada/atualizada pelo id fixo "default".
-model CompanySettings {
-  id          String      @id @default("default")
-  cnpj        String?
-  razaoSocial String?
-  uf          String?
-  ambiente    NfeAmbiente @default(PRODUCAO)
-
-  certificateFileName   String?
-  certificateUploadedAt DateTime?
-  certificateSubjectCn  String?
-  certificateValidTo    DateTime?
-  certificateData       Bytes?
-  certificateIv         Bytes?
-  certificateAuthTag    Bytes?
-  certificatePassword   Bytes?
-  certificatePasswordIv Bytes?
-  certificatePasswordTag Bytes?
-
-  nfeUltNsu        String    @default("000000000000000")
-  nfeMaxNsu        String    @default("000000000000000")
-  lastRadarCheckAt DateTime?
-  lastRadarStatus  String?
-  lastRadarError   String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@map("company_settings")
-}
-
-enum NfeImportStatus {
-  PENDENTE
-  IMPORTADA
-  REJEITADA
-  ERRO
 }
 
 /// Fila de NF-e detectadas pelo radar. Nenhuma entra em estoque/financeiro
@@ -354,6 +406,7 @@ enum NfeImportStatus {
 /// pendencia repetida nem, uma vez autorizada, relanca estoque duas vezes.
 model NfeImport {
   id              String          @id @default(uuid())
+  companyId       String
   chaveAcesso     String          @unique
   nsu             String
   supplierId      String?
@@ -375,10 +428,11 @@ model NfeImport {
 
   createdAt DateTime @default(now())
 
+  company       Company        @relation(fields: [companyId], references: [id])
   supplier      Supplier?      @relation(fields: [supplierId], references: [id])
   purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
   reviewedBy    User?          @relation(fields: [reviewedByUserId], references: [id])
 
-  @@index([status])
+  @@index([companyId, status])
   @@map("nfe_imports")
 }

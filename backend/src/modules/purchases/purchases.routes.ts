@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   FinancialStatus,
   FinancialType,
+  Prisma,
   PurchaseOrderStatus,
   StockMovementType,
 } from "@prisma/client";
@@ -11,6 +12,8 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticate } from "../../middlewares/auth";
 import { AppError } from "../../utils/AppError";
 import { buildInstallments } from "../../utils/installments";
+
+type Tx = Prisma.TransactionClient;
 
 const router = Router();
 router.use(authenticate);
@@ -37,12 +40,33 @@ function calculateTotals(items: z.infer<typeof purchaseItemSchema>[]) {
   return { subtotal: total, total };
 }
 
+async function assertBelongToCompany(tx: Tx, companyId: string, supplierId: string, productIds: string[]) {
+  const supplier = await tx.supplier.findFirst({ where: { id: supplierId, companyId } });
+  if (!supplier) throw new AppError("Fornecedor informado nao pertence a esta empresa", 422);
+
+  const uniqueProductIds = [...new Set(productIds)];
+  const ownedProducts = await tx.product.count({
+    where: { id: { in: uniqueProductIds }, companyId },
+  });
+  if (ownedProducts !== uniqueProductIds.length) {
+    throw new AppError("Um ou mais produtos informados nao pertencem a esta empresa", 422);
+  }
+}
+
+async function nextPurchaseOrderNumber(tx: Tx, companyId: string): Promise<number> {
+  const result = await tx.purchaseOrder.aggregate({ where: { companyId }, _max: { number: true } });
+  return (result._max.number ?? 0) + 1;
+}
+
 router.get(
   "/",
   asyncHandler(async (req, res) => {
     const { status } = req.query;
     const purchaseOrders = await prisma.purchaseOrder.findMany({
-      where: status ? { status: status as PurchaseOrderStatus } : undefined,
+      where: {
+        companyId: req.user!.companyId,
+        ...(status ? { status: status as PurchaseOrderStatus } : {}),
+      },
       include: { supplier: true, user: { select: { name: true } } },
       orderBy: { createdAt: "desc" },
     });
@@ -53,8 +77,8 @@ router.get(
 router.get(
   "/:id",
   asyncHandler(async (req, res) => {
-    const purchaseOrder = await prisma.purchaseOrder.findUnique({
-      where: { id: req.params.id },
+    const purchaseOrder = await prisma.purchaseOrder.findFirst({
+      where: { id: req.params.id, companyId: req.user!.companyId },
       include: {
         supplier: true,
         user: { select: { name: true } },
@@ -72,24 +96,36 @@ router.post(
   asyncHandler(async (req, res) => {
     const data = createPurchaseSchema.parse(req.body);
     const totals = calculateTotals(data.items);
+    const companyId = req.user!.companyId;
 
-    const purchaseOrder = await prisma.purchaseOrder.create({
-      data: {
-        supplierId: data.supplierId,
-        userId: req.user!.sub,
-        notes: data.notes,
-        subtotal: totals.subtotal,
-        total: totals.total,
-        items: {
-          create: data.items.map((item) => ({
-            productId: item.productId,
-            quantity: item.quantity,
-            unitCost: item.unitCost,
-            total: item.quantity * item.unitCost,
-          })),
+    const purchaseOrder = await prisma.$transaction(async (tx) => {
+      await assertBelongToCompany(
+        tx,
+        companyId,
+        data.supplierId,
+        data.items.map((item) => item.productId),
+      );
+
+      return tx.purchaseOrder.create({
+        data: {
+          companyId,
+          number: await nextPurchaseOrderNumber(tx, companyId),
+          supplierId: data.supplierId,
+          userId: req.user!.sub,
+          notes: data.notes,
+          subtotal: totals.subtotal,
+          total: totals.total,
+          items: {
+            create: data.items.map((item) => ({
+              productId: item.productId,
+              quantity: item.quantity,
+              unitCost: item.unitCost,
+              total: item.quantity * item.unitCost,
+            })),
+          },
         },
-      },
-      include: { items: true },
+        include: { items: true },
+      });
     });
 
     res.status(201).json(purchaseOrder);
@@ -100,10 +136,11 @@ router.post(
   "/:id/receive",
   asyncHandler(async (req, res) => {
     const { installments, firstDueDate } = receivePurchaseSchema.parse(req.body);
+    const companyId = req.user!.companyId;
 
     const purchaseOrder = await prisma.$transaction(async (tx) => {
-      const existing = await tx.purchaseOrder.findUnique({
-        where: { id: req.params.id },
+      const existing = await tx.purchaseOrder.findFirst({
+        where: { id: req.params.id, companyId },
         include: { items: true },
       });
       if (!existing) throw new AppError("Pedido de compra nao encontrado", 404);
@@ -112,7 +149,9 @@ router.post(
       }
 
       for (const item of existing.items) {
-        const product = await tx.product.findUniqueOrThrow({ where: { id: item.productId } });
+        const product = await tx.product.findFirstOrThrow({
+          where: { id: item.productId, companyId },
+        });
         const currentQty = Number(product.stockQuantity);
         const currentAvgCost = Number(product.averageCost);
         const incomingQty = Number(item.quantity);
@@ -153,6 +192,7 @@ router.post(
 
       await tx.financialTransaction.createMany({
         data: installmentPlans.map((plan) => ({
+          companyId,
           type: FinancialType.PAGAR,
           status: FinancialStatus.PENDENTE,
           description: `Compra #${existing.number}${plan.installmentTotal > 1 ? ` (parcela ${plan.installmentNumber}/${plan.installmentTotal})` : ""}`,
@@ -180,8 +220,10 @@ router.post(
 router.post(
   "/:id/cancel",
   asyncHandler(async (req, res) => {
+    const companyId = req.user!.companyId;
+
     const purchaseOrder = await prisma.$transaction(async (tx) => {
-      const existing = await tx.purchaseOrder.findUnique({ where: { id: req.params.id } });
+      const existing = await tx.purchaseOrder.findFirst({ where: { id: req.params.id, companyId } });
       if (!existing) throw new AppError("Pedido de compra nao encontrado", 404);
       if (existing.status !== PurchaseOrderStatus.PENDENTE) {
         throw new AppError("Apenas pedidos pendentes podem ser cancelados", 422);
