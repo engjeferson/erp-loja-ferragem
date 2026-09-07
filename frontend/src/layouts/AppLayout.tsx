@@ -17,6 +17,9 @@ const navItems: { to: string; label: string; roles?: Role[] }[] = [
 export function AppLayout() {
   const { user, logout } = useAuth();
   const visibleItems = navItems.filter((item) => !item.roles || (user && item.roles.includes(user.role)));
+  if (user?.isPlatformAdmin) {
+    visibleItems.push({ to: "/admin", label: "Super Admin" });
+  }
 
   return (
     <div className="flex min-h-screen">

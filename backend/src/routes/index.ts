@@ -12,6 +12,7 @@ import financialRoutes from "../modules/financial/financial.routes";
 import dashboardRoutes from "../modules/dashboard/dashboard.routes";
 import settingsRoutes from "../modules/settings/settings.routes";
 import nfeRoutes from "../modules/nfe/nfe.routes";
+import platformRoutes from "../modules/platform/platform.routes";
 
 const router = Router();
 
@@ -28,5 +29,6 @@ router.use("/financial", financialRoutes);
 router.use("/dashboard", dashboardRoutes);
 router.use("/settings", settingsRoutes);
 router.use("/nfe", nfeRoutes);
+router.use("/platform", platformRoutes);
 
 export default router;

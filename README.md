@@ -47,11 +47,23 @@ npx ts-node prisma/create-company.ts \
 
 Isso cria a empresa, o primeiro usuário (ADMIN) dela, e um catálogo inicial de unidades/categorias — o cliente não começa com o sistema vazio. `--cnpj` e `--uf` são opcionais (dá pra preencher depois em Configurações). Rode isso com o `DATABASE_URL` de produção configurado no ambiente (ou via `npx render` shell / conexão direta ao Neon).
 
+### Painel de Super Admin
+
+Existe uma tela `/admin` ("Super Admin" no menu) para gerenciar todas as empresas sem precisar do terminal ou acesso direto ao Neon. Ela só aparece no menu, e só responde, para usuários com a flag `User.isPlatformAdmin = true` — que é ortogonal ao `Role` (um usuário pode ser `ADMIN` só da própria empresa e não ter essa flag). Conceder essa flag também é manual, de propósito (mesma lógica do "sem cadastro público"):
+
+```bash
+cd backend
+npx ts-node prisma/grant-platform-admin.ts --email admin@suaempresa.com
+# para revogar:
+npx ts-node prisma/grant-platform-admin.ts --email admin@suaempresa.com --revoke
+```
+
+No painel dá para: listar todas as empresas com estatísticas (usuários, produtos, vendas, se já tem certificado), criar uma empresa nova direto pela interface (equivalente a rodar `create-company.ts`), ativar/desativar uma empresa, e resetar a senha do usuário ADMIN de uma empresa (ferramenta de suporte — o painel nunca expõe nem edita o certificado digital de ninguém). Toda rota `/platform/*` do backend exige a flag `isPlatformAdmin` no token — um usuário comum recebe 403.
+
 **Coisas para saber ao dar suporte a um cliente**:
 - Cada empresa tem sua própria numeração de vendas/pedidos de compra (`#1, #2, ...`) — não é uma sequência global, então duas empresas podem ter uma "Venda #1" ao mesmo tempo sem conflito.
 - SKU de produto, e-mail de usuário (esse sim é único no sistema todo, não só por empresa) e CNPJ de cliente/fornecedor são únicos **por empresa**, não globalmente — duas empresas podem cadastrar o mesmo SKU ou CNPJ de fornecedor sem colidir.
-- Hoje não existe painel de "super-admin" para você enxergar todas as empresas de uma tela só — para dar suporte, acesse o banco (Neon) diretamente.
-- Se precisar suspender um cliente sem apagar os dados, marque `Company.active = false` direto no banco — o login dele passa a ser recusado (mensagem "Esta empresa esta desativada").
+- Se precisar suspender um cliente sem apagar os dados, marque `Company.active = false` (pelo painel Super Admin ou direto no banco) — o login dele passa a ser recusado (mensagem "Esta empresa esta desativada").
 
 ## Rodando localmente
 
@@ -109,7 +121,6 @@ npm run build:frontend
 
 ## Próximos passos sugeridos
 
-- Painel de super-admin para listar/gerenciar todas as empresas de uma tela só (hoje é tudo manual via `create-company.ts` + acesso direto ao Neon).
 - Validar o Radar de NF-e ponta a ponta com certificado real em produção (não pôde ser testado no ambiente de desenvolvimento — ver seção acima).
 - Agendar o radar (cron) em vez de depender do clique manual em "Buscar novas notas".
 - Emissão de nota fiscal (NFC-e para venda ao consumidor final).

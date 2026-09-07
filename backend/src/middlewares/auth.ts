@@ -8,6 +8,7 @@ export interface AuthPayload {
   sub: string;
   role: Role;
   companyId: string;
+  isPlatformAdmin?: boolean;
 }
 
 declare global {
@@ -44,4 +45,11 @@ export function authorize(...roles: Role[]) {
     }
     next();
   };
+}
+
+export function requirePlatformAdmin(req: Request, _res: Response, next: NextFunction) {
+  if (!req.user?.isPlatformAdmin) {
+    throw new AppError("Voce nao tem permissao para executar esta acao", 403);
+  }
+  next();
 }

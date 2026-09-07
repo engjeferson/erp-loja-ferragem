@@ -12,6 +12,7 @@ import { Suppliers } from "./pages/Suppliers";
 import { Financial } from "./pages/Financial";
 import { Settings } from "./pages/Settings";
 import { NfeRadar } from "./pages/NfeRadar";
+import { PlatformAdmin } from "./pages/PlatformAdmin";
 
 export function App() {
   return (
@@ -30,6 +31,7 @@ export function App() {
               <Route path="/financeiro" element={<Financial />} />
               <Route path="/nfe-radar" element={<NfeRadar />} />
               <Route path="/configuracoes" element={<Settings />} />
+              <Route path="/admin" element={<PlatformAdmin />} />
             </Route>
           </Route>
         </Routes>

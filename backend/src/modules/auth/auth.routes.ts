@@ -34,7 +34,7 @@ router.post(
     }
 
     const token = jwt.sign(
-      { sub: user.id, role: user.role, companyId: user.companyId },
+      { sub: user.id, role: user.role, companyId: user.companyId, isPlatformAdmin: user.isPlatformAdmin },
       env.jwtSecret,
       { expiresIn: env.jwtExpiresIn } as jwt.SignOptions,
     );
@@ -47,6 +47,7 @@ router.post(
         email: user.email,
         role: user.role,
         companyName: user.company.name,
+        isPlatformAdmin: user.isPlatformAdmin,
       },
     });
   }),

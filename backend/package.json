@@ -10,7 +10,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "ts-node prisma/seed.ts",
-    "create-company": "ts-node prisma/create-company.ts"
+    "create-company": "ts-node prisma/create-company.ts",
+    "grant-platform-admin": "ts-node prisma/grant-platform-admin.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

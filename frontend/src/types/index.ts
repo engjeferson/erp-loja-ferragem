@@ -7,6 +7,23 @@ export interface User {
   role: Role;
   active?: boolean;
   companyName?: string;
+  isPlatformAdmin?: boolean;
+}
+
+export interface PlatformCompany {
+  id: string;
+  name: string;
+  active: boolean;
+  cnpj?: string | null;
+  razaoSocial?: string | null;
+  uf?: string | null;
+  ambiente: NfeAmbiente;
+  createdAt: string;
+  hasCertificate: boolean;
+  usersCount: number;
+  productsCount: number;
+  salesCount: number;
+  purchaseOrdersCount: number;
 }
 
 export interface Category {

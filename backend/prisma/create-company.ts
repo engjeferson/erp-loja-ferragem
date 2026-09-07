@@ -15,7 +15,7 @@
  * Configuracoes before using the radar de NF-e).
  */
 import { PrismaClient } from "@prisma/client";
-import { provisionCompany } from "./lib/provisionCompany";
+import { provisionCompany } from "../src/lib/provisionCompany";
 
 const prisma = new PrismaClient();
 
