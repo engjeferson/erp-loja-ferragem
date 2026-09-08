@@ -13,6 +13,7 @@ import dashboardRoutes from "../modules/dashboard/dashboard.routes";
 import settingsRoutes from "../modules/settings/settings.routes";
 import nfeRoutes from "../modules/nfe/nfe.routes";
 import platformRoutes from "../modules/platform/platform.routes";
+import deliveriesRoutes from "../modules/deliveries/deliveries.routes";
 
 const router = Router();
 
@@ -30,5 +31,6 @@ router.use("/dashboard", dashboardRoutes);
 router.use("/settings", settingsRoutes);
 router.use("/nfe", nfeRoutes);
 router.use("/platform", platformRoutes);
+router.use("/deliveries", deliveriesRoutes);
 
 export default router;

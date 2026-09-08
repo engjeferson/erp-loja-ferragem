@@ -38,7 +38,10 @@ enum PaymentMethod {
   CARTAO_DEBITO
   CARTAO_CREDITO
   BOLETO
+  /// Mantido pelos dados historicos ja gravados - novas vendas usam CADERNO.
   FIADO
+  /// Venda a prazo direto para o cliente (nome usado na interface: "Caderno").
+  CADERNO
 }
 
 enum FinancialType {
@@ -48,8 +51,19 @@ enum FinancialType {
 
 enum FinancialStatus {
   PENDENTE
+  PARCIALMENTE_PAGO
   PAGO
   CANCELADO
+}
+
+enum DiscountType {
+  VALOR
+  PERCENTUAL
+}
+
+enum DeliveryStatus {
+  PENDENTE
+  ENTREGUE
 }
 
 enum NfeAmbiente {
@@ -77,10 +91,22 @@ model Company {
   name   String
   active Boolean @default(true)
 
-  cnpj        String?     @unique
-  razaoSocial String?
-  uf          String?
-  ambiente    NfeAmbiente @default(PRODUCAO)
+  cnpj         String?     @unique
+  razaoSocial  String?
+  nomeFantasia String?
+  telefone     String?
+  cep          String?
+  endereco     String?
+  numero       String?
+  complemento  String?
+  bairro       String?
+  cidade       String?
+  uf           String?
+  ambiente     NfeAmbiente @default(PRODUCAO)
+
+  /// Logo exibido no menu e nos documentos (orcamento/venda em PDF).
+  logoData     Bytes?
+  logoMimeType String?
 
   certificateFileName    String?
   certificateUploadedAt  DateTime?
@@ -112,31 +138,35 @@ model Company {
   purchaseOrders        PurchaseOrder[]
   financialCategories   FinancialCategory[]
   financialTransactions FinancialTransaction[]
+  financialPayments     FinancialPayment[]
   nfeImports            NfeImport[]
+  nfeImportItems        NfeImportItem[]
+  deliveries            Delivery[]
 
   @@map("companies")
 }
 
 model User {
-  id           String   @id @default(uuid())
-  companyId    String
-  name         String
-  email        String   @unique
-  passwordHash String
-  role         Role     @default(VENDEDOR)
-  active       Boolean  @default(true)
+  id              String   @id @default(uuid())
+  companyId       String
+  name            String
+  email           String   @unique
+  passwordHash    String
+  role            Role     @default(VENDEDOR)
+  active          Boolean  @default(true)
   /// Acesso cross-company ao painel de super-admin (/platform/*), independente
   /// do Role (que so vale dentro da propria empresa). Concedido manualmente
   /// via prisma/grant-platform-admin.ts - nao existe UI para conceder isso.
-  isPlatformAdmin Boolean @default(false)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  isPlatformAdmin Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  company            Company         @relation(fields: [companyId], references: [id])
+  company            Company            @relation(fields: [companyId], references: [id])
   sales              Sale[]
   purchaseOrders     PurchaseOrder[]
   stockMovements     StockMovement[]
   reviewedNfeImports NfeImport[]
+  financialPayments  FinancialPayment[]
 
   @@index([companyId])
   @@map("users")
@@ -162,8 +192,10 @@ model Unit {
   name         String
   abbreviation String
 
-  company  Company   @relation(fields: [companyId], references: [id])
-  products Product[]
+  company            Company         @relation(fields: [companyId], references: [id])
+  productsAsStock    Product[]       @relation(name: "ProductStockUnit")
+  productsAsPurchase Product[]       @relation(name: "ProductPurchaseUnit")
+  nfeImportItems     NfeImportItem[]
 
   @@unique([companyId, name])
   @@unique([companyId, abbreviation])
@@ -178,7 +210,18 @@ model Product {
   name             String
   description      String?
   categoryId       String?
+  brand            String?
+  /// Unidade em que o produto e comprado do fornecedor (ex: ROLO, CAIXA).
+  /// Quando diferente da unidade de estoque/venda, a entrada e convertida
+  /// automaticamente usando conversionFactor (ver comentario no campo).
+  purchaseUnitId   String?
   unitId           String
+  /// Quantas unidades de estoque/venda equivalem a 1 unidade de compra.
+  /// Ex: 1 ROLO = 100 M -> conversionFactor = 100. Uma compra de 10 ROLO
+  /// vira 1000 M no estoque, e o custo unitario informado na compra e
+  /// dividido por este fator antes de entrar no custo medio (que e sempre
+  /// mantido na unidade de estoque/venda). Default 1 = sem conversao.
+  conversionFactor Decimal  @default(1) @db.Decimal(12, 4)
   costPrice        Decimal  @default(0) @db.Decimal(12, 2)
   salePrice        Decimal  @default(0) @db.Decimal(12, 2)
   averageCost      Decimal  @default(0) @db.Decimal(12, 4)
@@ -192,13 +235,15 @@ model Product {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  company  Company   @relation(fields: [companyId], references: [id])
-  category Category? @relation(fields: [categoryId], references: [id])
-  unit     Unit      @relation(fields: [unitId], references: [id])
+  company      Company   @relation(fields: [companyId], references: [id])
+  category     Category? @relation(fields: [categoryId], references: [id])
+  unit         Unit      @relation(fields: [unitId], references: [id], name: "ProductStockUnit")
+  purchaseUnit Unit?     @relation(fields: [purchaseUnitId], references: [id], name: "ProductPurchaseUnit")
 
   stockMovements     StockMovement[]
   saleItems          SaleItem[]
   purchaseOrderItems PurchaseOrderItem[]
+  nfeImportItems     NfeImportItem[]
 
   @@unique([companyId, sku])
   @@unique([companyId, barcode])
@@ -225,18 +270,30 @@ model StockMovement {
 }
 
 model Customer {
-  id        String   @id @default(uuid())
-  companyId String
-  name      String
-  document  String?
-  phone     String?
-  email     String?
-  address   String?
-  createdAt DateTime @default(now())
+  id           String   @id @default(uuid())
+  companyId    String
+  name         String
+  nomeFantasia String?
+  document     String?
+  phone        String?
+  whatsapp     String?
+  email        String?
+  /// Mantido por compatibilidade com cadastros antigos (endereco livre, uma
+  /// linha so). Cadastros novos preenchem os campos estruturados abaixo.
+  address      String?
+  cep          String?
+  numero       String?
+  complemento  String?
+  bairro       String?
+  cidade       String?
+  uf           String?
+  observacoes  String?
+  createdAt    DateTime @default(now())
 
   company               Company                @relation(fields: [companyId], references: [id])
   sales                 Sale[]
   financialTransactions FinancialTransaction[]
+  deliveries            Delivery[]
 
   @@unique([companyId, document])
   @@map("customers")
@@ -262,22 +319,29 @@ model Supplier {
 }
 
 model Sale {
-  id            String         @id @default(uuid())
-  companyId     String
+  id                      String         @id @default(uuid())
+  companyId               String
   /// Sequencial por empresa (nao um autoincrement global) - calculado na
   /// aplicacao ao confirmar, para cada cliente ter sua propria contagem
   /// "#1, #2, ..." em vez de herdar numeros de outras empresas.
-  number        Int
-  customerId    String?
-  userId        String
-  status        SaleStatus     @default(ORCAMENTO)
-  paymentMethod PaymentMethod?
-  subtotal      Decimal        @default(0) @db.Decimal(12, 2)
-  discount      Decimal        @default(0) @db.Decimal(12, 2)
-  total         Decimal        @default(0) @db.Decimal(12, 2)
-  notes         String?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  number                  Int
+  customerId              String?
+  userId                  String
+  status                  SaleStatus     @default(ORCAMENTO)
+  paymentMethod           PaymentMethod?
+  subtotal                Decimal        @default(0) @db.Decimal(12, 2)
+  /// Soma dos descontos por item (SaleItem.discount) - mantido para
+  /// compatibilidade com o calculo antigo.
+  discount                Decimal        @default(0) @db.Decimal(12, 2)
+  /// Desconto adicional informado no fechamento do orcamento/venda (campo
+  /// "Desconto" da tela), em R$ ou % conforme additionalDiscountType.
+  additionalDiscountType  DiscountType   @default(VALOR)
+  additionalDiscountValue Decimal        @default(0) @db.Decimal(12, 2)
+  freight                 Decimal        @default(0) @db.Decimal(12, 2)
+  total                   Decimal        @default(0) @db.Decimal(12, 2)
+  notes                   String?
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
 
   company  Company   @relation(fields: [companyId], references: [id])
   customer Customer? @relation(fields: [customerId], references: [id])
@@ -285,19 +349,52 @@ model Sale {
 
   items                 SaleItem[]
   financialTransactions FinancialTransaction[]
+  delivery              Delivery?
 
   @@unique([companyId, number])
   @@map("sales")
 }
 
+/// Entrega de uma venda/orcamento - 1:1 com Sale, so' existe quando o
+/// vendedor marca "Este orcamento/venda possui entrega". Separado em model
+/// proprio (em vez de campos soltos em Sale) porque o pedido explicitamente
+/// quer uma tela "Entregas" que lista/filtra isso como visao propria.
+model Delivery {
+  id            String         @id @default(uuid())
+  companyId     String
+  saleId        String         @unique
+  customerId    String?
+  scheduledDate DateTime?
+  /// Endereco de entrega pode ser diferente do endereco cadastrado do
+  /// cliente - por isso campos proprios em vez de so' referenciar Customer.
+  cep           String?
+  endereco      String?
+  numero        String?
+  complemento   String?
+  bairro        String?
+  cidade        String?
+  uf            String?
+  notes         String?
+  status        DeliveryStatus @default(PENDENTE)
+  deliveredAt   DateTime?
+  createdAt     DateTime       @default(now())
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  sale     Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  customer Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([companyId, status])
+  @@map("deliveries")
+}
+
 model SaleItem {
-  id         String  @id @default(uuid())
-  saleId     String
-  productId  String
-  quantity   Decimal @db.Decimal(12, 3)
-  unitPrice  Decimal @db.Decimal(12, 2)
-  discount   Decimal @default(0) @db.Decimal(12, 2)
-  total      Decimal @db.Decimal(12, 2)
+  id        String  @id @default(uuid())
+  saleId    String
+  productId String
+  quantity  Decimal @db.Decimal(12, 3)
+  unitPrice Decimal @db.Decimal(12, 2)
+  discount  Decimal @default(0) @db.Decimal(12, 2)
+  total     Decimal @db.Decimal(12, 2)
 
   sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id])
@@ -354,7 +451,7 @@ model FinancialCategory {
   type      FinancialType
   createdAt DateTime      @default(now())
 
-  company      Company                 @relation(fields: [companyId], references: [id])
+  company      Company                @relation(fields: [companyId], references: [id])
   transactions FinancialTransaction[]
 
   @@unique([companyId, name])
@@ -372,6 +469,10 @@ model FinancialTransaction {
   categoryId  String?
   description String
   amount      Decimal         @db.Decimal(12, 2)
+  /// Soma de todos os FinancialPayment desta transacao - mantido
+  /// denormalizado (atualizado na mesma transacao que cria um pagamento)
+  /// para nao precisar agregar toda vez que exibir saldo. saldo = amount - paidAmount.
+  paidAmount  Decimal         @default(0) @db.Decimal(12, 2)
   dueDate     DateTime
   paidAt      DateTime?
 
@@ -396,10 +497,35 @@ model FinancialTransaction {
   customer      Customer?          @relation(fields: [customerId], references: [id])
   sale          Sale?              @relation(fields: [saleId], references: [id])
   purchaseOrder PurchaseOrder?     @relation(fields: [purchaseOrderId], references: [id])
+  payments      FinancialPayment[]
 
   @@index([companyId, type, status])
   @@index([installmentGroupId])
   @@map("financial_transactions")
+}
+
+/// Registro individual de recebimento/pagamento aplicado a uma
+/// FinancialTransaction - nunca apagado, mesmo apos a transacao quitar
+/// (status PAGO). E o que da o historico do "Caderno" do cliente: uma
+/// venda de R$1000 pode ter 2 linhas aqui (R$300 depois R$500) antes de
+/// chegar a PAGO.
+model FinancialPayment {
+  id            String         @id @default(uuid())
+  companyId     String
+  transactionId String
+  amount        Decimal        @db.Decimal(12, 2)
+  paidAt        DateTime       @default(now())
+  paymentMethod PaymentMethod?
+  userId        String?
+  notes         String?
+  createdAt     DateTime       @default(now())
+
+  company     Company              @relation(fields: [companyId], references: [id])
+  transaction FinancialTransaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  user        User?                @relation(fields: [userId], references: [id])
+
+  @@index([companyId, transactionId])
+  @@map("financial_payments")
 }
 
 /// Fila de NF-e detectadas pelo radar. Nenhuma entra em estoque/financeiro
@@ -425,18 +551,54 @@ model NfeImport {
   /// da deteccao - permite autorizar depois sem consultar a SEFAZ de novo.
   /// Nulo quando o radar encontrou a chave mas nao conseguiu baixar o
   /// documento completo (fica como ERRO, sem nada para autorizar).
-  rawData Json?
+  rawData         Json?
 
   reviewedByUserId String?
   reviewedAt       DateTime?
 
   createdAt DateTime @default(now())
 
-  company       Company        @relation(fields: [companyId], references: [id])
-  supplier      Supplier?      @relation(fields: [supplierId], references: [id])
-  purchaseOrder PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
-  reviewedBy    User?          @relation(fields: [reviewedByUserId], references: [id])
+  company       Company         @relation(fields: [companyId], references: [id])
+  supplier      Supplier?       @relation(fields: [supplierId], references: [id])
+  purchaseOrder PurchaseOrder?  @relation(fields: [purchaseOrderId], references: [id])
+  reviewedBy    User?           @relation(fields: [reviewedByUserId], references: [id])
+  items         NfeImportItem[]
 
   @@index([companyId, status])
   @@map("nfe_imports")
+}
+
+/// Um item da NF-e, persistido a parte do rawData (JSON) assim que a nota
+/// e detectada, para permitir a etapa de revisao pedida antes de autorizar:
+/// o usuario associa a um produto existente ou marca para criar um novo,
+/// escolhendo a unidade de estoque e o fator de conversao. authorizeImport
+/// só' processa itens ja revisados (reviewed = true) - nunca decide sozinho
+/// qual produto usar.
+model NfeImportItem {
+  id                     String  @id @default(uuid())
+  companyId              String
+  nfeImportId            String
+  /// Dados fiscais originais da nota - nunca alterados (auditoria).
+  codigoProduto          String
+  descricao              String
+  unidadeComercial       String
+  quantidadeComercial    Decimal @db.Decimal(12, 3)
+  valorUnitarioComercial Decimal @db.Decimal(12, 4)
+  valorTotal             Decimal @db.Decimal(12, 2)
+
+  /// Escolhas de revisao - nulas ate o usuario revisar este item.
+  productId        String?
+  createNewProduct Boolean  @default(false)
+  unitId           String?
+  conversionFactor Decimal  @default(1) @db.Decimal(12, 4)
+  salePrice        Decimal? @db.Decimal(12, 2)
+  reviewed         Boolean  @default(false)
+
+  nfeImport NfeImport @relation(fields: [nfeImportId], references: [id], onDelete: Cascade)
+  company   Company   @relation(fields: [companyId], references: [id])
+  product   Product?  @relation(fields: [productId], references: [id])
+  unit      Unit?     @relation(fields: [unitId], references: [id])
+
+  @@index([nfeImportId])
+  @@map("nfe_import_items")
 }

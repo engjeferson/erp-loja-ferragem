@@ -1,13 +1,67 @@
 import { Router } from "express";
 import { z } from "zod";
-import { FinancialStatus, FinancialType } from "@prisma/client";
+import { FinancialStatus, FinancialType, PaymentMethod, Prisma, Role } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
-import { authenticate } from "../../middlewares/auth";
+import { authenticate, authorize } from "../../middlewares/auth";
 import { AppError } from "../../utils/AppError";
 
+type Tx = Prisma.TransactionClient;
+
 const router = Router();
-router.use(authenticate);
+/// Financeiro (contas a pagar/receber, custos) e restrito a
+/// ADMIN/GERENTE/FINANCEIRO - VENDEDOR nao enxerga esse modulo.
+router.use(authenticate, authorize(Role.ADMIN, Role.GERENTE, Role.FINANCEIRO));
+
+const paymentSchema = z.object({
+  amount: z.number().positive(),
+  paymentMethod: z.nativeEnum(PaymentMethod).optional(),
+  notes: z.string().optional(),
+});
+
+/**
+ * Aplica um recebimento/pagamento parcial ou total a uma FinancialTransaction:
+ * grava o FinancialPayment (nunca apagado, mesmo apos quitar) e atualiza
+ * paidAmount/status na mesma transacao. E a base do "Caderno" - uma venda de
+ * R$1000 pode passar por aqui duas vezes (R$300, depois R$500) antes de
+ * virar PAGO.
+ */
+export async function applyPayment(
+  tx: Tx,
+  transactionId: string,
+  companyId: string,
+  amount: number,
+  paymentMethod: PaymentMethod | undefined,
+  userId: string | undefined,
+  notes: string | undefined,
+) {
+  const transaction = await tx.financialTransaction.findFirst({ where: { id: transactionId, companyId } });
+  if (!transaction) throw new AppError("Lancamento nao encontrado", 404);
+  if (transaction.status === FinancialStatus.PAGO || transaction.status === FinancialStatus.CANCELADO) {
+    throw new AppError("Este lancamento ja esta quitado ou cancelado", 422);
+  }
+
+  const saldo = Number(transaction.amount) - Number(transaction.paidAmount);
+  if (amount > saldo + 0.005) {
+    throw new AppError(`O valor informado (${amount}) e maior que o saldo devido (${saldo.toFixed(2)})`, 422);
+  }
+
+  await tx.financialPayment.create({
+    data: { companyId, transactionId, amount, paymentMethod, userId, notes },
+  });
+
+  const newPaidAmount = Number(transaction.paidAmount) + amount;
+  const isFullyPaid = newPaidAmount >= Number(transaction.amount) - 0.005;
+
+  return tx.financialTransaction.update({
+    where: { id: transaction.id },
+    data: {
+      paidAmount: newPaidAmount,
+      status: isFullyPaid ? FinancialStatus.PAGO : FinancialStatus.PARCIALMENTE_PAGO,
+      paidAt: isFullyPaid ? new Date() : transaction.paidAt,
+    },
+  });
+}
 
 const categorySchema = z.object({
   name: z.string().min(2),
@@ -26,12 +80,18 @@ const createTransactionSchema = z.object({
   notes: z.string().optional(),
 });
 
-/** Adds a computed `overdue` flag without persisting a VENCIDO status,
- * so it can never drift out of sync with the current date. */
-function withOverdueFlag<T extends { status: FinancialStatus; dueDate: Date }>(transaction: T) {
+/** Adds a computed `overdue` flag (without persisting a VENCIDO status, so
+ * it never drifts out of sync with the current date) and `saldo` (quanto
+ * ainda falta pagar/receber, considerando pagamentos parciais ja aplicados). */
+function withOverdueFlag<T extends { status: FinancialStatus; dueDate: Date; amount: unknown; paidAmount: unknown }>(
+  transaction: T,
+) {
+  const stillOpen =
+    transaction.status === FinancialStatus.PENDENTE || transaction.status === FinancialStatus.PARCIALMENTE_PAGO;
   return {
     ...transaction,
-    overdue: transaction.status === FinancialStatus.PENDENTE && transaction.dueDate < new Date(),
+    saldo: Number(transaction.amount) - Number(transaction.paidAmount),
+    overdue: stillOpen && transaction.dueDate < new Date(),
   };
 }
 
@@ -72,7 +132,7 @@ router.get(
           lte: to ? new Date(String(to)) : undefined,
         },
       },
-      include: { category: true, supplier: true, customer: true },
+      include: { category: true, supplier: true, customer: true, payments: true },
       orderBy: { dueDate: "asc" },
     });
 
@@ -106,21 +166,41 @@ router.post(
   }),
 );
 
+const settleSchema = z.object({ paymentMethod: z.nativeEnum(PaymentMethod).optional() });
+
+/** Baixa rapida: quita o saldo inteiro de uma vez (equivalente a um
+ * pagamento cujo valor e o saldo devido). */
 router.post(
   "/transactions/:id/settle",
   asyncHandler(async (req, res) => {
-    const transaction = await prisma.financialTransaction.findFirst({
-      where: { id: req.params.id, companyId: req.user!.companyId },
-    });
-    if (!transaction) throw new AppError("Lancamento nao encontrado", 404);
-    if (transaction.status !== FinancialStatus.PENDENTE) {
-      throw new AppError("Apenas lancamentos pendentes podem ser baixados", 422);
-    }
+    const { paymentMethod } = settleSchema.parse(req.body ?? {});
+    const companyId = req.user!.companyId;
 
-    const updated = await prisma.financialTransaction.update({
-      where: { id: transaction.id },
-      data: { status: FinancialStatus.PAGO, paidAt: new Date() },
+    const updated = await prisma.$transaction(async (tx) => {
+      const transaction = await tx.financialTransaction.findFirst({
+        where: { id: req.params.id, companyId },
+      });
+      if (!transaction) throw new AppError("Lancamento nao encontrado", 404);
+
+      const saldo = Number(transaction.amount) - Number(transaction.paidAmount);
+      return applyPayment(tx, transaction.id, companyId, saldo, paymentMethod, req.user!.sub, undefined);
     });
+
+    res.json(withOverdueFlag(updated));
+  }),
+);
+
+/** Recebimento/pagamento parcial - grava o historico em FinancialPayment e
+ * atualiza o saldo, sem exigir quitar tudo de uma vez (base do Caderno). */
+router.post(
+  "/transactions/:id/payments",
+  asyncHandler(async (req, res) => {
+    const { amount, paymentMethod, notes } = paymentSchema.parse(req.body);
+    const companyId = req.user!.companyId;
+
+    const updated = await prisma.$transaction((tx) =>
+      applyPayment(tx, req.params.id, companyId, amount, paymentMethod, req.user!.sub, notes),
+    );
 
     res.json(withOverdueFlag(updated));
   }),
@@ -152,42 +232,26 @@ router.get(
     const companyId = req.user!.companyId;
     const now = new Date();
 
-    const [pendingReceivable, pendingPayable, overdueReceivable, overduePayable] =
-      await Promise.all([
-        prisma.financialTransaction.aggregate({
-          where: { companyId, type: FinancialType.RECEBER, status: FinancialStatus.PENDENTE },
-          _sum: { amount: true },
-        }),
-        prisma.financialTransaction.aggregate({
-          where: { companyId, type: FinancialType.PAGAR, status: FinancialStatus.PENDENTE },
-          _sum: { amount: true },
-        }),
-        prisma.financialTransaction.aggregate({
-          where: {
-            companyId,
-            type: FinancialType.RECEBER,
-            status: FinancialStatus.PENDENTE,
-            dueDate: { lt: now },
-          },
-          _sum: { amount: true },
-        }),
-        prisma.financialTransaction.aggregate({
-          where: {
-            companyId,
-            type: FinancialType.PAGAR,
-            status: FinancialStatus.PENDENTE,
-            dueDate: { lt: now },
-          },
-          _sum: { amount: true },
-        }),
-      ]);
+    const openStatuses: FinancialStatus[] = [FinancialStatus.PENDENTE, FinancialStatus.PARCIALMENTE_PAGO];
 
-    res.json({
-      pendingReceivable: pendingReceivable._sum.amount ?? 0,
-      pendingPayable: pendingPayable._sum.amount ?? 0,
-      overdueReceivable: overdueReceivable._sum.amount ?? 0,
-      overduePayable: overduePayable._sum.amount ?? 0,
-    });
+    /** Soma o saldo (amount - paidAmount) das transacoes em aberto que
+     * casam com o filtro extra informado (ex: vencidas). */
+    async function sumOpenBalance(type: FinancialType, extraWhere: Prisma.FinancialTransactionWhereInput = {}) {
+      const rows = await prisma.financialTransaction.findMany({
+        where: { companyId, type, status: { in: openStatuses }, ...extraWhere },
+        select: { amount: true, paidAmount: true },
+      });
+      return rows.reduce((sum, row) => sum + (Number(row.amount) - Number(row.paidAmount)), 0);
+    }
+
+    const [pendingReceivable, pendingPayable, overdueReceivable, overduePayable] = await Promise.all([
+      sumOpenBalance(FinancialType.RECEBER),
+      sumOpenBalance(FinancialType.PAGAR),
+      sumOpenBalance(FinancialType.RECEBER, { dueDate: { lt: now } }),
+      sumOpenBalance(FinancialType.PAGAR, { dueDate: { lt: now } }),
+    ]);
+
+    res.json({ pendingReceivable, pendingPayable, overdueReceivable, overduePayable });
   }),
 );
 

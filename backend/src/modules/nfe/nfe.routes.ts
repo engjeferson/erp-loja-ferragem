@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import { Company, Role } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
@@ -154,11 +155,81 @@ router.get(
         companyId: req.user!.companyId,
         ...(status ? { status: status as never } : {}),
       },
-      include: { supplier: true, purchaseOrder: true, reviewedBy: { select: { name: true } } },
+      include: {
+        supplier: true,
+        purchaseOrder: true,
+        reviewedBy: { select: { name: true } },
+        items: { include: { product: { select: { name: true } }, unit: true } },
+      },
       orderBy: { createdAt: "desc" },
       take: 200,
     });
     res.json(imports);
+  }),
+);
+
+const reviewItemSchema = z
+  .object({
+    productId: z.string().uuid().nullable().optional(),
+    createNewProduct: z.boolean().optional(),
+    unitId: z.string().uuid().optional(),
+    conversionFactor: z.number().positive().optional(),
+    salePrice: z.number().nonnegative().optional(),
+  })
+  .refine((data) => Boolean(data.productId) !== Boolean(data.createNewProduct), {
+    message: "Escolha associar a um produto existente OU criar um novo, nao os dois",
+  });
+
+/**
+ * Revisa um item da nota antes da autorizacao: associa a um produto ja
+ * cadastrado, ou marca para criar um novo (exigindo a unidade de estoque e
+ * o fator de conversao, ja que authorizeImport usa exatamente esses dados
+ * pra converter a quantidade/custo da unidade fiscal da nota para a unidade
+ * de estoque do produto).
+ */
+router.patch(
+  "/imports/:id/items/:itemId",
+  authorize(Role.ADMIN, Role.GERENTE),
+  asyncHandler(async (req, res) => {
+    const data = reviewItemSchema.parse(req.body);
+    const companyId = req.user!.companyId;
+
+    const nfeImport = await prisma.nfeImport.findFirst({ where: { id: req.params.id, companyId } });
+    if (!nfeImport) throw new AppError("Nota nao encontrada", 404);
+    if (nfeImport.status !== "PENDENTE") {
+      throw new AppError("Esta nota ja foi autorizada, rejeitada ou nao pode ser processada", 422);
+    }
+
+    const item = await prisma.nfeImportItem.findFirst({
+      where: { id: req.params.itemId, nfeImportId: nfeImport.id, companyId },
+    });
+    if (!item) throw new AppError("Item nao encontrado nesta nota", 404);
+
+    let unitId = data.unitId;
+    let conversionFactor = data.conversionFactor;
+
+    if (data.productId) {
+      const product = await prisma.product.findFirst({ where: { id: data.productId, companyId } });
+      if (!product) throw new AppError("Produto informado nao pertence a esta empresa", 422);
+      unitId = unitId ?? product.unitId;
+      conversionFactor = conversionFactor ?? Number(product.conversionFactor);
+    } else if (data.createNewProduct && !unitId) {
+      throw new AppError("Escolha a unidade de estoque/venda do novo produto", 422);
+    }
+
+    const updated = await prisma.nfeImportItem.update({
+      where: { id: item.id },
+      data: {
+        productId: data.productId ?? null,
+        createNewProduct: Boolean(data.createNewProduct),
+        unitId,
+        conversionFactor: conversionFactor ?? 1,
+        salePrice: data.salePrice,
+        reviewed: true,
+      },
+    });
+
+    res.json(updated);
   }),
 );
 

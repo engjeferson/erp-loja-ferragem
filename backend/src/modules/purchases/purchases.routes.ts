@@ -5,18 +5,21 @@ import {
   FinancialType,
   Prisma,
   PurchaseOrderStatus,
+  Role,
   StockMovementType,
 } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { asyncHandler } from "../../utils/asyncHandler";
-import { authenticate } from "../../middlewares/auth";
+import { authenticate, authorize } from "../../middlewares/auth";
 import { AppError } from "../../utils/AppError";
 import { buildInstallments } from "../../utils/installments";
 
 type Tx = Prisma.TransactionClient;
 
 const router = Router();
-router.use(authenticate);
+/// Compras (com custo/fornecedor/financeiro a pagar) e restrita a
+/// ADMIN/GERENTE - VENDEDOR nao deve ver nem lancar dados de compra.
+router.use(authenticate, authorize(Role.ADMIN, Role.GERENTE));
 
 const purchaseItemSchema = z.object({
   productId: z.string().uuid(),
@@ -154,8 +157,14 @@ router.post(
         });
         const currentQty = Number(product.stockQuantity);
         const currentAvgCost = Number(product.averageCost);
-        const incomingQty = Number(item.quantity);
-        const incomingCost = Number(item.unitCost);
+
+        // item.quantity/unitCost sao como foram lancados no pedido (na
+        // unidade de compra do produto, ex: ROLO) - convertidos aqui pra
+        // unidade de estoque/venda (ex: M) antes de mexer no saldo, usando
+        // o mesmo fator configurado no cadastro do produto.
+        const conversionFactor = Number(product.conversionFactor) || 1;
+        const incomingQty = Number(item.quantity) * conversionFactor;
+        const incomingCost = Number(item.unitCost) / conversionFactor;
 
         const newQty = currentQty + incomingQty;
         const newAverageCost =

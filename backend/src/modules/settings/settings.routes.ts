@@ -17,6 +17,18 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
+const uploadLogo = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.mimetype)) {
+      cb(new AppError("Envie uma imagem PNG, JPEG ou WEBP", 422));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
 const companySchema = z.object({
   name: z.string().min(2).optional(),
   cnpj: z
@@ -25,6 +37,14 @@ const companySchema = z.object({
     .refine((value) => value.length === 14, "CNPJ deve ter 14 digitos")
     .optional(),
   razaoSocial: z.string().min(2).optional(),
+  nomeFantasia: z.string().optional(),
+  telefone: z.string().optional(),
+  cep: z.string().optional(),
+  endereco: z.string().optional(),
+  numero: z.string().optional(),
+  complemento: z.string().optional(),
+  bairro: z.string().optional(),
+  cidade: z.string().optional(),
   uf: z
     .string()
     .length(2)
@@ -46,8 +66,17 @@ router.get(
       name: company.name,
       cnpj: company.cnpj,
       razaoSocial: company.razaoSocial,
+      nomeFantasia: company.nomeFantasia,
+      telefone: company.telefone,
+      cep: company.cep,
+      endereco: company.endereco,
+      numero: company.numero,
+      complemento: company.complemento,
+      bairro: company.bairro,
+      cidade: company.cidade,
       uf: company.uf,
       ambiente: company.ambiente,
+      logoDataUri: company.logoData ? `data:${company.logoMimeType};base64,${company.logoData.toString("base64")}` : null,
       hasCertificate: Boolean(company.certificateData),
       certificateFileName: company.certificateFileName,
       certificateSubjectCn: company.certificateSubjectCn,
@@ -75,9 +104,45 @@ router.put(
       name: company.name,
       cnpj: company.cnpj,
       razaoSocial: company.razaoSocial,
+      nomeFantasia: company.nomeFantasia,
+      telefone: company.telefone,
+      cep: company.cep,
+      endereco: company.endereco,
+      numero: company.numero,
+      complemento: company.complemento,
+      bairro: company.bairro,
+      cidade: company.cidade,
       uf: company.uf,
       ambiente: company.ambiente,
     });
+  }),
+);
+
+router.post(
+  "/company/logo",
+  uploadLogo.single("logo"),
+  asyncHandler(async (req, res) => {
+    if (!req.file) throw new AppError("Envie o arquivo do logo", 422);
+
+    const company = await prisma.company.update({
+      where: { id: req.user!.companyId },
+      data: { logoData: req.file.buffer, logoMimeType: req.file.mimetype },
+    });
+
+    res.status(201).json({
+      logoDataUri: `data:${company.logoMimeType};base64,${company.logoData!.toString("base64")}`,
+    });
+  }),
+);
+
+router.delete(
+  "/company/logo",
+  asyncHandler(async (req, res) => {
+    await prisma.company.update({
+      where: { id: req.user!.companyId },
+      data: { logoData: null, logoMimeType: null },
+    });
+    res.status(204).send();
   }),
 );
 

@@ -10,7 +10,7 @@ import {
 } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { AppError } from "../utils/AppError";
-import { NfeCompleta, ItemNfe } from "./nfeSefaz";
+import { NfeCompleta } from "./nfeSefaz";
 
 type Tx = Prisma.TransactionClient;
 
@@ -40,27 +40,6 @@ async function generateUniqueSku(tx: Tx, companyId: string, productCode: string)
   }
 
   return candidate;
-}
-
-async function findOrCreateProduct(tx: Tx, companyId: string, item: ItemNfe, unitId: string) {
-  const name = item.descricao.trim();
-  const existing = await tx.product.findFirst({
-    where: { companyId, name: { equals: name, mode: "insensitive" } },
-  });
-  if (existing) return existing;
-
-  const sku = await generateUniqueSku(tx, companyId, item.codigoProduto);
-  return tx.product.create({
-    data: {
-      companyId,
-      sku,
-      name,
-      unitId,
-      costPrice: item.valorUnitarioComercial,
-      salePrice: item.valorUnitarioComercial,
-      needsReview: true,
-    },
-  });
 }
 
 async function nextPurchaseOrderNumber(tx: Tx, companyId: string): Promise<number> {
@@ -99,6 +78,20 @@ export async function recordPendingImport(
       dataEmissao: nfe.dataEmissao,
       status: NfeImportStatus.PENDENTE,
       rawData: nfe as unknown as Prisma.InputJsonValue,
+      /// Cada item vira uma linha propria, persistida a parte do rawData, pra
+      /// permitir a etapa de revisao (associar produto / criar novo, escolher
+      /// unidade e fator de conversao) antes de autorizar - ver ImportItems.
+      items: {
+        create: nfe.itens.map((item) => ({
+          companyId,
+          codigoProduto: item.codigoProduto,
+          descricao: item.descricao,
+          unidadeComercial: item.unidadeComercial,
+          quantidadeComercial: item.quantidadeComercial,
+          valorUnitarioComercial: item.valorUnitarioComercial,
+          valorTotal: item.valorTotal,
+        })),
+      },
     },
   });
 }
@@ -167,13 +160,19 @@ export async function authorizeImport(
   companyId: string,
   userId: string,
 ): Promise<ImportOutcome> {
-  const pending = await prisma.nfeImport.findFirst({ where: { id: nfeImportId, companyId } });
+  const pending = await prisma.nfeImport.findFirst({
+    where: { id: nfeImportId, companyId },
+    include: { items: true },
+  });
   if (!pending) throw new AppError("Nota nao encontrada", 404);
   if (pending.status !== NfeImportStatus.PENDENTE) {
     throw new AppError("Esta nota ja foi autorizada, rejeitada ou nao pode ser processada", 422);
   }
   if (!pending.rawData) {
     throw new AppError("Esta nota nao tem os dados completos - nao e possivel autorizar", 422);
+  }
+  if (pending.items.length === 0 || pending.items.some((item) => !item.reviewed)) {
+    throw new AppError("Revise todos os itens (associe a um produto ou crie um novo) antes de autorizar", 422);
   }
 
   const nfe = pending.rawData as unknown as NfeCompleta;
@@ -196,34 +195,71 @@ export async function authorizeImport(
         },
       });
 
-      for (const item of nfe.itens) {
-        const unit = await findOrCreateUnit(tx, companyId, item.unidadeComercial);
-        const product = await findOrCreateProduct(tx, companyId, item, unit.id);
+      for (const reviewedItem of pending.items) {
+        let product;
+        if (reviewedItem.createNewProduct) {
+          if (!reviewedItem.unitId) {
+            throw new AppError(`Item "${reviewedItem.descricao}" nao tem unidade de estoque escolhida`, 422);
+          }
+          const purchaseUnit = await findOrCreateUnit(tx, companyId, reviewedItem.unidadeComercial);
+          const conversionFactor = Number(reviewedItem.conversionFactor) || 1;
+          const costPrice = Number(reviewedItem.valorUnitarioComercial) / conversionFactor;
+          const sku = await generateUniqueSku(tx, companyId, reviewedItem.codigoProduto);
+
+          product = await tx.product.create({
+            data: {
+              companyId,
+              sku,
+              name: reviewedItem.descricao.trim(),
+              unitId: reviewedItem.unitId,
+              purchaseUnitId: purchaseUnit.id,
+              conversionFactor,
+              costPrice,
+              salePrice: reviewedItem.salePrice ? Number(reviewedItem.salePrice) : costPrice,
+              needsReview: true,
+            },
+          });
+        } else {
+          if (!reviewedItem.productId) {
+            throw new AppError(`Item "${reviewedItem.descricao}" nao foi associado a nenhum produto`, 422);
+          }
+          product = await tx.product.findFirst({ where: { id: reviewedItem.productId, companyId } });
+          if (!product) {
+            throw new AppError(`Produto associado ao item "${reviewedItem.descricao}" nao pertence a esta empresa`, 422);
+          }
+        }
+
+        // Converte a quantidade/custo da unidade fiscal da nota (ex: ROLO)
+        // para a unidade de estoque do produto (ex: M), usando o fator
+        // configurado na revisao (ou o do proprio produto, se nao veio um
+        // valor especifico para este item).
+        const conversionFactor = Number(reviewedItem.conversionFactor) || Number(product.conversionFactor) || 1;
+        const quantity = Number(reviewedItem.quantidadeComercial) * conversionFactor;
+        const unitCost = Number(reviewedItem.valorUnitarioComercial) / conversionFactor;
+
+        await tx.nfeImportItem.update({ where: { id: reviewedItem.id }, data: { productId: product.id } });
 
         await tx.purchaseOrderItem.create({
           data: {
             purchaseOrderId: purchaseOrder.id,
             productId: product.id,
-            quantity: item.quantidadeComercial,
-            unitCost: item.valorUnitarioComercial,
-            total: item.valorTotal,
+            quantity,
+            unitCost,
+            total: Number(reviewedItem.valorTotal),
           },
         });
 
         const currentQty = Number(product.stockQuantity);
         const currentAvgCost = Number(product.averageCost);
-        const newQty = currentQty + item.quantidadeComercial;
-        const newAverageCost =
-          newQty > 0
-            ? (currentQty * currentAvgCost + item.quantidadeComercial * item.valorUnitarioComercial) / newQty
-            : currentAvgCost;
+        const newQty = currentQty + quantity;
+        const newAverageCost = newQty > 0 ? (currentQty * currentAvgCost + quantity * unitCost) / newQty : currentAvgCost;
 
         await tx.stockMovement.create({
           data: {
             productId: product.id,
             userId,
             type: StockMovementType.ENTRADA,
-            quantity: item.quantidadeComercial,
+            quantity,
             referenceType: "NFE_RADAR",
             referenceId: purchaseOrder.id,
           },
@@ -234,7 +270,7 @@ export async function authorizeImport(
           data: {
             stockQuantity: newQty,
             averageCost: newAverageCost,
-            costPrice: item.valorUnitarioComercial,
+            costPrice: unitCost,
           },
         });
       }
