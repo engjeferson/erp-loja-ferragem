@@ -334,6 +334,16 @@ export function Pdv() {
     }
   }
 
+  async function handlePrint(saleId: string) {
+    try {
+      const response = await api.get(`/sales/${saleId}/pdf`, { responseType: "blob" });
+      const blobUrl = URL.createObjectURL(response.data);
+      window.open(blobUrl, "_blank");
+    } catch (err) {
+      window.alert(getApiErrorMessage(err));
+    }
+  }
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold text-slate-800">Orcamentos / Vendas</h1>
@@ -702,7 +712,14 @@ export function Pdv() {
                 <td className="px-4 py-2">{budget.customer?.name ?? "Consumidor final"}</td>
                 <td className="px-4 py-2">{formatCurrency(budget.total)}</td>
                 <td className="px-4 py-2">{formatDate(budget.createdAt)}</td>
-                <td className="px-4 py-2 text-right space-x-3">
+                <td className="px-4 py-2 text-right space-x-3 whitespace-nowrap">
+                  <button
+                    type="button"
+                    onClick={() => handlePrint(budget.id)}
+                    className="text-slate-600 hover:underline"
+                  >
+                    PDF
+                  </button>
                   <button
                     type="button"
                     onClick={() => setConvertingBudget(budget)}
@@ -743,7 +760,14 @@ export function Pdv() {
                 <td className="px-4 py-2">{sale.customer?.name ?? "Consumidor final"}</td>
                 <td className="px-4 py-2">{formatCurrency(sale.total)}</td>
                 <td className="px-4 py-2">{formatDate(sale.createdAt)}</td>
-                <td className="px-4 py-2 text-right">
+                <td className="px-4 py-2 text-right space-x-3 whitespace-nowrap">
+                  <button
+                    type="button"
+                    onClick={() => handlePrint(sale.id)}
+                    className="text-slate-600 hover:underline"
+                  >
+                    PDF
+                  </button>
                   <button
                     type="button"
                     onClick={() => handleCancelSale(sale.id)}

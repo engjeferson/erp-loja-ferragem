@@ -14,6 +14,7 @@ import { asyncHandler } from "../../utils/asyncHandler";
 import { authenticate } from "../../middlewares/auth";
 import { AppError } from "../../utils/AppError";
 import { buildInstallments } from "../../utils/installments";
+import { paymentMethodLabel, renderSaleDocument } from "../../lib/pdf/saleDocument";
 
 type Tx = Prisma.TransactionClient;
 
@@ -168,6 +169,71 @@ router.get(
     });
     if (!sale) throw new AppError("Venda nao encontrada", 404);
     res.json(sale);
+  }),
+);
+
+/**
+ * Documento de orcamento ou venda em PDF - mesmo layout pros dois casos,
+ * ja que sao o mesmo registro (Sale), so o titulo e a secao de pagamento
+ * mudam conforme o status.
+ */
+router.get(
+  "/:id/pdf",
+  asyncHandler(async (req, res) => {
+    const companyId = req.user!.companyId;
+    const sale = await prisma.sale.findFirst({
+      where: { id: req.params.id, companyId },
+      include: {
+        customer: true,
+        items: { include: { product: { include: { unit: true } } } },
+        delivery: true,
+        financialTransactions: { take: 1 },
+      },
+    });
+    if (!sale) throw new AppError("Venda nao encontrada", 404);
+
+    const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } });
+
+    const customerAddressParts = sale.customer
+      ? [sale.customer.address, sale.customer.numero, sale.customer.bairro, sale.customer.cidade, sale.customer.uf].filter(
+          Boolean,
+        )
+      : [];
+
+    renderSaleDocument(res, company, {
+      number: sale.number,
+      isBudget: sale.status === SaleStatus.ORCAMENTO,
+      createdAt: sale.createdAt,
+      customerName: sale.customer?.name,
+      customerDocument: sale.customer?.document,
+      customerPhone: sale.customer?.phone,
+      customerAddress: customerAddressParts.length > 0 ? customerAddressParts.join(", ") : null,
+      items: sale.items.map((item) => ({
+        productName: item.product.name,
+        quantity: item.quantity.toString(),
+        unitAbbreviation: item.product.unit.abbreviation,
+        unitPrice: item.unitPrice.toString(),
+        total: item.total.toString(),
+      })),
+      subtotal: sale.subtotal.toString(),
+      discount: sale.discount.toString(),
+      freight: sale.freight.toString(),
+      total: sale.total.toString(),
+      notes: sale.notes,
+      delivery: sale.delivery
+        ? {
+            scheduledDate: sale.delivery.scheduledDate,
+            endereco: sale.delivery.endereco,
+            numero: sale.delivery.numero,
+            bairro: sale.delivery.bairro,
+            cidade: sale.delivery.cidade,
+            uf: sale.delivery.uf,
+            notes: sale.delivery.notes,
+          }
+        : null,
+      paymentMethodLabel: paymentMethodLabel(sale.paymentMethod),
+      installmentTotal: sale.financialTransactions[0]?.installmentTotal ?? null,
+    });
   }),
 );
 
