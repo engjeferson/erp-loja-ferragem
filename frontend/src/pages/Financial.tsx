@@ -60,8 +60,27 @@ export function Financial() {
   }
 
   async function handleSettle(id: string) {
-    await api.post(`/financial/transactions/${id}/settle`);
-    await load();
+    if (!window.confirm("Baixar (quitar) o saldo inteiro deste lancamento?")) return;
+    try {
+      await api.post(`/financial/transactions/${id}/settle`);
+      await load();
+    } catch (err) {
+      window.alert(getApiErrorMessage(err));
+    }
+  }
+
+  async function handlePartialPayment(id: string, saldo: number) {
+    const raw = window.prompt(`Valor recebido/pago agora (saldo: ${formatCurrency(saldo)}):`);
+    if (!raw) return;
+    const amount = Number(raw);
+    if (Number.isNaN(amount) || amount <= 0) return;
+
+    try {
+      await api.post(`/financial/transactions/${id}/payments`, { amount });
+      await load();
+    } catch (err) {
+      window.alert(getApiErrorMessage(err));
+    }
   }
 
   async function handleCancel(id: string) {
@@ -192,37 +211,53 @@ export function Financial() {
               <th className="px-4 py-2">Favorecido</th>
               <th className="px-4 py-2">Vencimento</th>
               <th className="px-4 py-2">Valor</th>
+              <th className="px-4 py-2">Saldo</th>
               <th className="px-4 py-2">Status</th>
               <th className="px-4 py-2"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {transactions.map((transaction) => (
-              <tr key={transaction.id}>
-                <td className="px-4 py-2">{transaction.type === "PAGAR" ? "Pagar" : "Receber"}</td>
-                <td className="px-4 py-2">{transaction.description}</td>
-                <td className="px-4 py-2">
-                  {transaction.customer?.name ?? transaction.supplier?.name ?? transaction.counterpartyName ?? "-"}
-                </td>
-                <td className="px-4 py-2">{formatDate(transaction.dueDate)}</td>
-                <td className="px-4 py-2">{formatCurrency(transaction.amount)}</td>
-                <td className="px-4 py-2">
-                  {transaction.status === "PENDENTE" && transaction.overdue ? (
-                    <span className="text-red-600 font-medium">Vencido</span>
-                  ) : (
-                    transaction.status
-                  )}
-                </td>
-                <td className="px-4 py-2 text-right space-x-2">
-                  {transaction.status === "PENDENTE" && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => handleSettle(transaction.id)}
-                        className="text-emerald-600 hover:underline"
-                      >
-                        Baixar
-                      </button>
+            {transactions.map((transaction) => {
+              const isOpen = transaction.status === "PENDENTE" || transaction.status === "PARCIALMENTE_PAGO";
+              return (
+                <tr key={transaction.id}>
+                  <td className="px-4 py-2">{transaction.type === "PAGAR" ? "Pagar" : "Receber"}</td>
+                  <td className="px-4 py-2">{transaction.description}</td>
+                  <td className="px-4 py-2">
+                    {transaction.customer?.name ?? transaction.supplier?.name ?? transaction.counterpartyName ?? "-"}
+                  </td>
+                  <td className="px-4 py-2">{formatDate(transaction.dueDate)}</td>
+                  <td className="px-4 py-2">{formatCurrency(transaction.amount)}</td>
+                  <td className="px-4 py-2">{formatCurrency(transaction.saldo)}</td>
+                  <td className="px-4 py-2">
+                    {isOpen && transaction.overdue ? (
+                      <span className="text-red-600 font-medium">Vencido</span>
+                    ) : transaction.status === "PARCIALMENTE_PAGO" ? (
+                      <span className="text-amber-600 font-medium">Parcial</span>
+                    ) : (
+                      transaction.status
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-right space-x-2 whitespace-nowrap">
+                    {isOpen && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handlePartialPayment(transaction.id, transaction.saldo)}
+                          className="text-brand-600 hover:underline"
+                        >
+                          Receber/pagar parcial
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSettle(transaction.id)}
+                          className="text-emerald-600 hover:underline"
+                        >
+                          Baixar tudo
+                        </button>
+                      </>
+                    )}
+                    {transaction.status === "PENDENTE" && (
                       <button
                         type="button"
                         onClick={() => handleCancel(transaction.id)}
@@ -230,11 +265,11 @@ export function Financial() {
                       >
                         Cancelar
                       </button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

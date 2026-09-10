@@ -9,17 +9,37 @@ const UFS = [
   "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
 ];
 
+const emptyCompanyForm = {
+  name: "",
+  cnpj: "",
+  razaoSocial: "",
+  nomeFantasia: "",
+  telefone: "",
+  cep: "",
+  endereco: "",
+  numero: "",
+  complemento: "",
+  bairro: "",
+  cidade: "",
+  uf: "",
+  ambiente: "PRODUCAO" as NfeAmbiente,
+};
+
 export function Settings() {
   const [settings, setSettings] = useState<CompanySettings | null>(null);
-  const [companyForm, setCompanyForm] = useState({ name: "", cnpj: "", razaoSocial: "", uf: "", ambiente: "PRODUCAO" as NfeAmbiente });
+  const [companyForm, setCompanyForm] = useState(emptyCompanyForm);
   const [certPassword, setCertPassword] = useState("");
   const [certFile, setCertFile] = useState<File | null>(null);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
   const [savingCompany, setSavingCompany] = useState(false);
   const [uploadingCert, setUploadingCert] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
   const [companyMessage, setCompanyMessage] = useState<string | null>(null);
   const [certMessage, setCertMessage] = useState<string | null>(null);
+  const [logoMessage, setLogoMessage] = useState<string | null>(null);
   const [companyError, setCompanyError] = useState<string | null>(null);
   const [certError, setCertError] = useState<string | null>(null);
+  const [logoError, setLogoError] = useState<string | null>(null);
 
   async function load() {
     const response = await api.get<CompanySettings>("/settings/company");
@@ -28,6 +48,14 @@ export function Settings() {
       name: response.data.name ?? "",
       cnpj: response.data.cnpj ?? "",
       razaoSocial: response.data.razaoSocial ?? "",
+      nomeFantasia: response.data.nomeFantasia ?? "",
+      telefone: response.data.telefone ?? "",
+      cep: response.data.cep ?? "",
+      endereco: response.data.endereco ?? "",
+      numero: response.data.numero ?? "",
+      complemento: response.data.complemento ?? "",
+      bairro: response.data.bairro ?? "",
+      cidade: response.data.cidade ?? "",
       uf: response.data.uf ?? "",
       ambiente: response.data.ambiente,
     });
@@ -81,6 +109,32 @@ export function Settings() {
     await load();
   }
 
+  async function handleUploadLogo(event: FormEvent) {
+    event.preventDefault();
+    if (!logoFile) return;
+    setLogoError(null);
+    setLogoMessage(null);
+    setUploadingLogo(true);
+    try {
+      const formData = new FormData();
+      formData.append("logo", logoFile);
+      await api.post("/settings/company/logo", formData);
+      setLogoMessage("Logo atualizado.");
+      setLogoFile(null);
+      await load();
+    } catch (err) {
+      setLogoError(getApiErrorMessage(err));
+    } finally {
+      setUploadingLogo(false);
+    }
+  }
+
+  async function handleRemoveLogo() {
+    if (!window.confirm("Remover o logo da empresa?")) return;
+    await api.delete("/settings/company/logo");
+    await load();
+  }
+
   if (!settings) {
     return <p className="text-slate-500">Carregando...</p>;
   }
@@ -88,6 +142,42 @@ export function Settings() {
   return (
     <div className="space-y-6 max-w-3xl">
       <h1 className="text-2xl font-semibold text-slate-800">Configuracoes</h1>
+
+      <div className="bg-white rounded-lg shadow-sm p-6 space-y-4">
+        <h2 className="font-semibold text-slate-800">Logo da empresa</h2>
+        <p className="text-sm text-slate-500">
+          Aparece no menu do sistema e no cabecalho dos documentos (orcamento e venda em PDF).
+        </p>
+
+        {settings.logoDataUri ? (
+          <div className="flex items-center gap-4">
+            <img src={settings.logoDataUri} alt="Logo da empresa" className="h-16 w-auto rounded border border-slate-200" />
+            <button type="button" onClick={handleRemoveLogo} className="text-red-600 hover:underline text-sm">
+              Remover logo
+            </button>
+          </div>
+        ) : (
+          <p className="text-sm text-amber-600">Nenhum logo cadastrado ainda.</p>
+        )}
+
+        <form onSubmit={handleUploadLogo} className="flex items-center gap-2 pt-2 border-t border-slate-100">
+          {logoError && <div className="bg-red-50 text-red-700 text-sm px-3 py-2 rounded">{logoError}</div>}
+          {logoMessage && <div className="bg-emerald-50 text-emerald-700 text-sm px-3 py-2 rounded">{logoMessage}</div>}
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(e) => setLogoFile(e.target.files?.[0] ?? null)}
+            className="text-sm flex-1"
+          />
+          <button
+            type="submit"
+            disabled={!logoFile || uploadingLogo}
+            className="bg-brand-600 hover:bg-brand-700 text-white text-sm px-4 py-2 rounded disabled:opacity-50"
+          >
+            {uploadingLogo ? "Enviando..." : "Enviar logo"}
+          </button>
+        </form>
+      </div>
 
       <div className="bg-white rounded-lg shadow-sm p-6 space-y-4">
         <h2 className="font-semibold text-slate-800">Dados fiscais da empresa</h2>
@@ -119,6 +209,54 @@ export function Settings() {
             value={companyForm.razaoSocial}
             onChange={(e) => setCompanyForm({ ...companyForm, razaoSocial: e.target.value })}
             className="border border-slate-300 rounded px-3 py-2 text-sm col-span-2"
+          />
+          <input
+            placeholder="Nome fantasia"
+            value={companyForm.nomeFantasia}
+            onChange={(e) => setCompanyForm({ ...companyForm, nomeFantasia: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm col-span-2"
+          />
+          <input
+            placeholder="Telefone"
+            value={companyForm.telefone}
+            onChange={(e) => setCompanyForm({ ...companyForm, telefone: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm col-span-2"
+          />
+          <input
+            placeholder="CEP"
+            value={companyForm.cep}
+            onChange={(e) => setCompanyForm({ ...companyForm, cep: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm"
+          />
+          <input
+            placeholder="Endereco"
+            value={companyForm.endereco}
+            onChange={(e) => setCompanyForm({ ...companyForm, endereco: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm col-span-2"
+          />
+          <input
+            placeholder="Numero"
+            value={companyForm.numero}
+            onChange={(e) => setCompanyForm({ ...companyForm, numero: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm"
+          />
+          <input
+            placeholder="Complemento"
+            value={companyForm.complemento}
+            onChange={(e) => setCompanyForm({ ...companyForm, complemento: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm"
+          />
+          <input
+            placeholder="Bairro"
+            value={companyForm.bairro}
+            onChange={(e) => setCompanyForm({ ...companyForm, bairro: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm"
+          />
+          <input
+            placeholder="Cidade"
+            value={companyForm.cidade}
+            onChange={(e) => setCompanyForm({ ...companyForm, cidade: e.target.value })}
+            className="border border-slate-300 rounded px-3 py-2 text-sm"
           />
           <select
             value={companyForm.uf}

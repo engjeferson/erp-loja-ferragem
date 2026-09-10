@@ -45,7 +45,7 @@ export function Purchases() {
           item.product.id === product.id ? { ...item, quantity: item.quantity + 1 } : item,
         );
       }
-      return [...prev, { product, quantity: 1, unitCost: Number(product.averageCost) || Number(product.costPrice) }];
+      return [...prev, { product, quantity: 1, unitCost: Number(product.averageCost ?? 0) || Number(product.costPrice ?? 0) }];
     });
   }
 
@@ -113,7 +113,7 @@ export function Purchases() {
                   <div>
                     <p className="text-sm font-medium text-slate-800">{product.name}</p>
                     <p className="text-xs text-slate-500">
-                      {product.sku} - custo medio: {formatCurrency(product.averageCost)}
+                      {product.sku} - custo medio: {formatCurrency(product.averageCost ?? "0")}
                     </p>
                   </div>
                   <button

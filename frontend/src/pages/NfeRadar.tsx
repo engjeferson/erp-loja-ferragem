@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, getApiErrorMessage } from "../services/api";
-import { CompanySettings, NfeImport } from "../types";
+import { CompanySettings, NfeImport, NfeImportItem, Product, Unit } from "../types";
 import { formatCurrency, formatDate } from "../utils/format";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -18,17 +18,155 @@ const STATUS_CLASS: Record<string, string> = {
   ERRO: "text-red-600",
 };
 
+function ItemReviewRow({
+  nfeImportId,
+  item,
+  products,
+  units,
+  onReviewed,
+}: {
+  nfeImportId: string;
+  item: NfeImportItem;
+  products: Product[];
+  units: Unit[];
+  onReviewed: (item: NfeImportItem) => void;
+}) {
+  const [mode, setMode] = useState<"existing" | "new">(item.productId ? "existing" : "new");
+  const [productId, setProductId] = useState(item.productId ?? "");
+  const [unitId, setUnitId] = useState(item.unitId ?? "");
+  const [conversionFactor, setConversionFactor] = useState(item.conversionFactor ?? "1");
+  const [salePrice, setSalePrice] = useState(item.salePrice ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <tr className="border-t border-amber-100 align-top">
+      <td className="py-2 pr-2">
+        {item.descricao}
+        {item.reviewed && <span className="ml-2 text-emerald-600 text-xs">revisado</span>}
+      </td>
+      <td className="py-2 pr-2">
+        {item.quantidadeComercial} {item.unidadeComercial}
+      </td>
+      <td className="py-2 pr-2">{formatCurrency(item.valorUnitarioComercial)}</td>
+      <td className="py-2 pr-2 space-y-1">
+        <div className="flex gap-3 text-xs">
+          <label className="flex items-center gap-1">
+            <input type="radio" checked={mode === "existing"} onChange={() => setMode("existing")} />
+            Associar existente
+          </label>
+          <label className="flex items-center gap-1">
+            <input type="radio" checked={mode === "new"} onChange={() => setMode("new")} />
+            Criar novo
+          </label>
+        </div>
+
+        {mode === "existing" ? (
+          <select
+            value={productId}
+            onChange={(e) => setProductId(e.target.value)}
+            className="border border-slate-300 rounded px-2 py-1 text-xs w-full"
+          >
+            <option value="">Selecione o produto</option>
+            {products.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({p.sku})
+              </option>
+            ))}
+          </select>
+        ) : (
+          <div className="flex gap-1">
+            <select
+              value={unitId}
+              onChange={(e) => setUnitId(e.target.value)}
+              className="border border-slate-300 rounded px-2 py-1 text-xs flex-1"
+            >
+              <option value="">Unidade de estoque</option>
+              {units.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.abbreviation}
+                </option>
+              ))}
+            </select>
+            <input
+              type="number"
+              min={0.0001}
+              step="0.0001"
+              title="Fator de conversao (1 unidade da nota = X unidades de estoque)"
+              placeholder="Fator"
+              value={conversionFactor}
+              onChange={(e) => setConversionFactor(e.target.value)}
+              className="border border-slate-300 rounded px-2 py-1 text-xs w-16"
+            />
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              placeholder="Preco venda"
+              value={salePrice}
+              onChange={(e) => setSalePrice(e.target.value)}
+              className="border border-slate-300 rounded px-2 py-1 text-xs w-24"
+            />
+          </div>
+        )}
+        {error && <p className="text-red-600 text-xs">{error}</p>}
+      </td>
+      <td className="py-2 text-right">
+        <button
+          type="button"
+          disabled={saving || (mode === "existing" ? !productId : !unitId)}
+          onClick={async () => {
+            setError(null);
+            setSaving(true);
+            try {
+              const payload =
+                mode === "existing"
+                  ? { productId }
+                  : {
+                      createNewProduct: true,
+                      unitId,
+                      conversionFactor: Number(conversionFactor) || 1,
+                      salePrice: salePrice ? Number(salePrice) : undefined,
+                    };
+              const response = await api.patch<NfeImportItem>(
+                `/nfe/imports/${nfeImportId}/items/${item.id}`,
+                payload,
+              );
+              onReviewed(response.data);
+            } catch (err) {
+              setError(getApiErrorMessage(err));
+            } finally {
+              setSaving(false);
+            }
+          }}
+          className="bg-slate-800 hover:bg-slate-900 text-white text-xs px-3 py-1.5 rounded disabled:opacity-50"
+        >
+          {saving ? "Salvando..." : "Salvar revisao"}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
 function PendingRow({
   item,
+  products,
+  units,
   onAuthorize,
   onReject,
+  onItemReviewed,
 }: {
   item: NfeImport;
+  products: Product[];
+  units: Unit[];
   onAuthorize: (id: string) => void;
   onReject: (id: string) => void;
+  onItemReviewed: (nfeId: string, updatedItem: NfeImportItem) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const [busy, setBusy] = useState(false);
+
+  const allReviewed = item.items.length > 0 && item.items.every((i) => i.reviewed);
 
   async function handleAuthorize() {
     if (!window.confirm("Autorizar esta nota? Isso vai lancar entrada de estoque e conta a pagar.")) return;
@@ -61,7 +199,7 @@ function PendingRow({
         </div>
         <div className="flex items-center gap-3 text-sm">
           <button type="button" onClick={() => setExpanded((v) => !v)} className="text-slate-600 hover:underline">
-            {expanded ? "Ocultar itens" : "Ver itens"}
+            {expanded ? "Ocultar itens" : "Revisar itens"}
           </button>
           <button
             type="button"
@@ -73,7 +211,8 @@ function PendingRow({
           </button>
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || !allReviewed}
+            title={!allReviewed ? "Revise todos os itens antes de autorizar" : undefined}
             onClick={handleAuthorize}
             className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded disabled:opacity-50"
           >
@@ -82,32 +221,38 @@ function PendingRow({
         </div>
       </div>
 
-      {expanded && item.rawData && (
+      {expanded && (
         <div className="border-t border-amber-200 px-4 py-3 space-y-3">
+          {!allReviewed && (
+            <p className="text-xs text-amber-700">
+              Revise cada item abaixo (associe a um produto existente ou crie um novo) antes de autorizar.
+            </p>
+          )}
           <table className="w-full text-xs">
             <thead className="text-slate-500 text-left">
               <tr>
-                <th className="py-1">Produto</th>
+                <th className="py-1">Produto (na nota)</th>
                 <th className="py-1">Qtd</th>
-                <th className="py-1">Unid.</th>
                 <th className="py-1">Valor unit.</th>
-                <th className="py-1">Total</th>
+                <th className="py-1">Revisao</th>
+                <th className="py-1"></th>
               </tr>
             </thead>
             <tbody>
-              {item.rawData.itens.map((prod, index) => (
-                <tr key={index} className="border-t border-amber-100">
-                  <td className="py-1">{prod.descricao}</td>
-                  <td className="py-1">{prod.quantidadeComercial}</td>
-                  <td className="py-1">{prod.unidadeComercial}</td>
-                  <td className="py-1">{formatCurrency(prod.valorUnitarioComercial)}</td>
-                  <td className="py-1">{formatCurrency(prod.valorTotal)}</td>
-                </tr>
+              {item.items.map((nfeItem) => (
+                <ItemReviewRow
+                  key={nfeItem.id}
+                  nfeImportId={item.id}
+                  item={nfeItem}
+                  products={products}
+                  units={units}
+                  onReviewed={(updated) => onItemReviewed(item.id, updated)}
+                />
               ))}
             </tbody>
           </table>
 
-          {item.rawData.duplicatas.length > 0 && (
+          {item.rawData && item.rawData.duplicatas.length > 0 && (
             <div>
               <p className="text-xs font-medium text-slate-600 mb-1">Parcelas (duplicatas da nota)</p>
               <ul className="text-xs text-slate-600 space-y-0.5">
@@ -120,11 +265,6 @@ function PendingRow({
               </ul>
             </div>
           )}
-
-          <p className="text-xs text-amber-700">
-            Produtos novos criados na autorizacao entram com preco de venda igual ao de custo -
-            revise depois em Produtos.
-          </p>
         </div>
       )}
     </div>
@@ -134,17 +274,23 @@ function PendingRow({
 export function NfeRadar() {
   const [settings, setSettings] = useState<CompanySettings | null>(null);
   const [imports, setImports] = useState<NfeImport[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [units, setUnits] = useState<Unit[]>([]);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
 
   async function load() {
-    const [settingsResponse, importsResponse] = await Promise.all([
+    const [settingsResponse, importsResponse, productsResponse, unitsResponse] = await Promise.all([
       api.get<CompanySettings>("/settings/company"),
       api.get<NfeImport[]>("/nfe/imports"),
+      api.get<Product[]>("/products"),
+      api.get<Unit[]>("/units"),
     ]);
     setSettings(settingsResponse.data);
     setImports(importsResponse.data);
+    setProducts(productsResponse.data);
+    setUnits(unitsResponse.data);
   }
 
   const [now, setNow] = useState(() => Date.now());
@@ -194,6 +340,16 @@ export function NfeRadar() {
     } catch (err) {
       window.alert(getApiErrorMessage(err));
     }
+  }
+
+  function handleItemReviewed(nfeId: string, updatedItem: NfeImportItem) {
+    setImports((prev) =>
+      prev.map((imp) =>
+        imp.id === nfeId
+          ? { ...imp, items: imp.items.map((i) => (i.id === updatedItem.id ? updatedItem : i)) }
+          : imp,
+      ),
+    );
   }
 
   if (!settings) {
@@ -266,7 +422,15 @@ export function NfeRadar() {
           <p className="text-sm text-slate-400">Nenhuma nota pendente no momento.</p>
         ) : (
           pending.map((item) => (
-            <PendingRow key={item.id} item={item} onAuthorize={handleAuthorize} onReject={handleReject} />
+            <PendingRow
+              key={item.id}
+              item={item}
+              products={products}
+              units={units}
+              onAuthorize={handleAuthorize}
+              onReject={handleReject}
+              onItemReviewed={handleItemReviewed}
+            />
           ))
         )}
       </div>
@@ -312,12 +476,11 @@ export function NfeRadar() {
       </div>
 
       <p className="text-sm text-slate-500">
-        Produtos criados automaticamente na autorizacao entram com preco de venda igual ao de custo -
-        confira a lista de{" "}
+        Produtos criados na revisao de itens entram para revisao de preco/categoria em{" "}
         <Link to="/produtos" className="underline">
           produtos
-        </Link>{" "}
-        para revisar precos e categorias.
+        </Link>
+        .
       </p>
     </div>
   );

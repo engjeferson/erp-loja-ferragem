@@ -46,24 +46,48 @@ export interface Product {
   description?: string | null;
   categoryId?: string | null;
   category?: Category | null;
+  brand?: string | null;
   unitId: string;
   unit?: Unit;
-  costPrice: string;
+  purchaseUnitId?: string | null;
+  purchaseUnit?: Unit | null;
+  conversionFactor: string;
+  costPrice?: string;
   salePrice: string;
-  averageCost: string;
+  averageCost?: string;
+  margin?: number;
   stockQuantity: string;
   minStockQuantity: string;
   active: boolean;
   needsReview?: boolean;
 }
 
+export interface ProductPurchaseHistoryEntry {
+  date: string;
+  supplierName: string;
+  purchaseOrderNumber: number;
+  nfeChaveAcesso: string | null;
+  quantity: string;
+  unitCost: string;
+  total: string;
+}
+
 export interface Customer {
   id: string;
   name: string;
+  nomeFantasia?: string | null;
   document?: string | null;
   phone?: string | null;
+  whatsapp?: string | null;
   email?: string | null;
   address?: string | null;
+  cep?: string | null;
+  numero?: string | null;
+  complemento?: string | null;
+  bairro?: string | null;
+  cidade?: string | null;
+  uf?: string | null;
+  observacoes?: string | null;
 }
 
 export interface Supplier {
@@ -82,7 +106,34 @@ export type PaymentMethod =
   | "CARTAO_DEBITO"
   | "CARTAO_CREDITO"
   | "BOLETO"
-  | "FIADO";
+  | "FIADO"
+  | "CADERNO";
+
+export type DiscountType = "VALOR" | "PERCENTUAL";
+export type DeliveryStatus = "PENDENTE" | "ENTREGUE";
+
+export interface DeliveryInput {
+  scheduledDate?: string;
+  cep?: string;
+  endereco?: string;
+  numero?: string;
+  complemento?: string;
+  bairro?: string;
+  cidade?: string;
+  uf?: string;
+  notes?: string;
+}
+
+export interface Delivery extends DeliveryInput {
+  id: string;
+  saleId: string;
+  customerId?: string | null;
+  status: DeliveryStatus;
+  deliveredAt?: string | null;
+  createdAt: string;
+  sale?: { number: number; total: string };
+  customer?: { name: string; phone?: string | null; whatsapp?: string | null } | null;
+}
 
 export interface SaleItem {
   id?: string;
@@ -103,9 +154,13 @@ export interface Sale {
   paymentMethod?: PaymentMethod | null;
   subtotal: string;
   discount: string;
+  additionalDiscountType: DiscountType;
+  additionalDiscountValue: string;
+  freight: string;
   total: string;
   notes?: string | null;
   items: SaleItem[];
+  delivery?: Delivery | null;
   createdAt: string;
 }
 
@@ -134,7 +189,17 @@ export interface PurchaseOrder {
 }
 
 export type FinancialType = "PAGAR" | "RECEBER";
-export type FinancialStatus = "PENDENTE" | "PAGO" | "CANCELADO";
+export type FinancialStatus = "PENDENTE" | "PARCIALMENTE_PAGO" | "PAGO" | "CANCELADO";
+
+export interface FinancialPayment {
+  id: string;
+  transactionId: string;
+  amount: string;
+  paidAt: string;
+  paymentMethod?: PaymentMethod | null;
+  userId?: string | null;
+  notes?: string | null;
+}
 
 export interface FinancialTransaction {
   id: string;
@@ -142,14 +207,25 @@ export interface FinancialTransaction {
   status: FinancialStatus;
   description: string;
   amount: string;
+  paidAmount: string;
+  saldo: number;
   dueDate: string;
   paidAt?: string | null;
   counterpartyName?: string | null;
   supplier?: Supplier | null;
   customer?: Customer | null;
+  sale?: { number: number } | null;
   installmentNumber: number;
   installmentTotal: number;
   overdue?: boolean;
+  payments?: FinancialPayment[];
+}
+
+export interface CadernoSummary {
+  totalComprado: number;
+  totalRecebido: number;
+  saldo: number;
+  transactions: FinancialTransaction[];
 }
 
 export type NfeAmbiente = "PRODUCAO" | "HOMOLOGACAO";
@@ -158,8 +234,17 @@ export interface CompanySettings {
   name?: string | null;
   cnpj?: string | null;
   razaoSocial?: string | null;
+  nomeFantasia?: string | null;
+  telefone?: string | null;
+  cep?: string | null;
+  endereco?: string | null;
+  numero?: string | null;
+  complemento?: string | null;
+  bairro?: string | null;
+  cidade?: string | null;
   uf?: string | null;
   ambiente: NfeAmbiente;
+  logoDataUri?: string | null;
   hasCertificate: boolean;
   certificateFileName?: string | null;
   certificateSubjectCn?: string | null;
@@ -173,13 +258,22 @@ export interface CompanySettings {
 
 export type NfeImportStatus = "PENDENTE" | "IMPORTADA" | "REJEITADA" | "ERRO";
 
-export interface NfeItemPreview {
+export interface NfeImportItem {
+  id: string;
   codigoProduto: string;
   descricao: string;
   unidadeComercial: string;
-  quantidadeComercial: number;
-  valorUnitarioComercial: number;
-  valorTotal: number;
+  quantidadeComercial: string;
+  valorUnitarioComercial: string;
+  valorTotal: string;
+  productId?: string | null;
+  product?: { name: string } | null;
+  createNewProduct: boolean;
+  unitId?: string | null;
+  unit?: Unit | null;
+  conversionFactor: string;
+  salePrice?: string | null;
+  reviewed: boolean;
 }
 
 export interface NfeDuplicataPreview {
@@ -201,8 +295,8 @@ export interface NfeImport {
   supplier?: Supplier | null;
   purchaseOrder?: PurchaseOrder | null;
   reviewedBy?: { name: string } | null;
+  items: NfeImportItem[];
   rawData?: {
-    itens: NfeItemPreview[];
     duplicatas: NfeDuplicataPreview[];
   } | null;
 }

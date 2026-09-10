@@ -34,8 +34,13 @@ function stripCostFieldsForVendedor<T extends Record<string, unknown>>(role: Rol
   return rest as T;
 }
 
-function withMargin<T extends { salePrice: unknown; averageCost: unknown }>(product: T) {
-  return { ...product, margin: marginFromPrice(Number(product.averageCost), Number(product.salePrice)) };
+/** Antes da primeira compra, averageCost fica em 0 (ninguem ainda entrou
+ * estoque pra esse produto) - nesse caso a margem exibida usa o costPrice
+ * informado manualmente no cadastro, senao toda margem apareceria como
+ * 100% (preco - 0) / preco pra produto novo. */
+function withMargin<T extends { salePrice: unknown; averageCost: unknown; costPrice: unknown }>(product: T) {
+  const cost = Number(product.averageCost) || Number(product.costPrice);
+  return { ...product, margin: marginFromPrice(cost, Number(product.salePrice)) };
 }
 
 const stockAdjustmentSchema = z.object({
