@@ -13,6 +13,8 @@ export const env = {
   databaseUrl: required("DATABASE_URL"),
   jwtSecret: required("JWT_SECRET"),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "8h",
-  corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
+  /// Lista separada por virgula, pra aceitar o dominio proprio e o
+  /// *.vercel.app ao mesmo tempo durante a transicao entre um e outro.
+  corsOrigins: (process.env.CORS_ORIGIN ?? "http://localhost:5173").split(",").map((origin) => origin.trim()),
   encryptionKey: required("ENCRYPTION_KEY"),
 };
