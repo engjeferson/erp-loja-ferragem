@@ -141,6 +141,7 @@ model Company {
   financialPayments     FinancialPayment[]
   nfeImports            NfeImport[]
   nfeImportItems        NfeImportItem[]
+  supplierProductLinks  SupplierProductLink[]
   deliveries            Delivery[]
 
   @@map("companies")
@@ -240,10 +241,12 @@ model Product {
   unit         Unit      @relation(fields: [unitId], references: [id], name: "ProductStockUnit")
   purchaseUnit Unit?     @relation(fields: [purchaseUnitId], references: [id], name: "ProductPurchaseUnit")
 
-  stockMovements     StockMovement[]
-  saleItems          SaleItem[]
-  purchaseOrderItems PurchaseOrderItem[]
-  nfeImportItems     NfeImportItem[]
+  stockMovements       StockMovement[]
+  saleItems            SaleItem[]
+  purchaseOrderItems   PurchaseOrderItem[]
+  nfeImportItems       NfeImportItem[]       @relation("NfeImportItemProduct")
+  nfeImportSuggestions NfeImportItem[]       @relation("NfeImportItemSuggestion")
+  supplierProductLinks SupplierProductLink[]
 
   @@unique([companyId, sku])
   @@unique([companyId, barcode])
@@ -316,6 +319,27 @@ model Supplier {
 
   @@unique([companyId, document])
   @@map("suppliers")
+}
+
+/// Lembra qual produto do catalogo corresponde ao codigo de produto de um
+/// fornecedor (o cProd da nota), aprendido quando o usuario associa um item
+/// da NF-e a um produto existente na revisao. Assim, a proxima nota do mesmo
+/// fornecedor com o mesmo codigo ja chega com o produto pre-sugerido em
+/// NfeImportItem.suggestedProductId, so precisando confirmar.
+model SupplierProductLink {
+  id            String   @id @default(uuid())
+  companyId     String
+  supplierCnpj  String
+  codigoProduto String
+  productId     String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@unique([companyId, supplierCnpj, codigoProduto])
+  @@map("supplier_product_links")
 }
 
 model Sale {
@@ -538,6 +562,9 @@ model NfeImport {
   id              String          @id @default(uuid())
   companyId       String
   chaveAcesso     String          @unique
+  /// Numero da NF-e (nNF) - so para exibicao, ja que chaveAcesso e a chave
+  /// unica real. Nulo em notas antigas anteriores a este campo.
+  numero          String?
   nsu             String
   supplierId      String?
   purchaseOrderId String?         @unique
@@ -594,10 +621,16 @@ model NfeImportItem {
   salePrice        Decimal? @db.Decimal(12, 2)
   reviewed         Boolean  @default(false)
 
-  nfeImport NfeImport @relation(fields: [nfeImportId], references: [id], onDelete: Cascade)
-  company   Company   @relation(fields: [companyId], references: [id])
-  product   Product?  @relation(fields: [productId], references: [id])
-  unit      Unit?     @relation(fields: [unitId], references: [id])
+  /// Produto sugerido automaticamente (ver SupplierProductLink) quando este
+  /// mesmo fornecedor+codigo ja foi associado a um produto antes. So uma
+  /// sugestao - reviewed continua false ate o usuario confirmar ou trocar.
+  suggestedProductId String?
+
+  nfeImport        NfeImport @relation(fields: [nfeImportId], references: [id], onDelete: Cascade)
+  company          Company   @relation(fields: [companyId], references: [id])
+  product          Product?  @relation("NfeImportItemProduct", fields: [productId], references: [id])
+  suggestedProduct Product?  @relation("NfeImportItemSuggestion", fields: [suggestedProductId], references: [id])
+  unit             Unit?     @relation(fields: [unitId], references: [id])
 
   @@index([nfeImportId])
   @@map("nfe_import_items")

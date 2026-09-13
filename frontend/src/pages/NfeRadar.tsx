@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, getApiErrorMessage } from "../services/api";
-import { CompanySettings, NfeImport, NfeImportItem, Product, Unit } from "../types";
+import { CompanySettings, NfeImport, NfeImportItem, Product, ProductPurchaseHistoryEntry, Unit } from "../types";
 import { formatCurrency, formatDate } from "../utils/format";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -17,6 +17,93 @@ const STATUS_CLASS: Record<string, string> = {
   REJEITADA: "text-slate-400",
   ERRO: "text-red-600",
 };
+
+/**
+ * Combobox de busca de produto: com centenas de produtos cadastrados, um
+ * <select> comum vira impraticavel. Digita parte do nome ou do SKU e filtra
+ * na hora, como a busca de item nos ERPs de balcao mais usados no ramo.
+ */
+function ProductCombobox({
+  products,
+  value,
+  onChange,
+  placeholder,
+}: {
+  products: Product[];
+  value: string;
+  onChange: (productId: string) => void;
+  placeholder?: string;
+}) {
+  const selected = products.find((p) => p.id === value) ?? null;
+  const [query, setQuery] = useState(selected ? `${selected.name} (${selected.sku})` : "");
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const current = products.find((p) => p.id === value) ?? null;
+    setQuery(current ? `${current.name} (${current.sku})` : "");
+  }, [value, products]);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const matches = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    if (!term || (selected && query === `${selected.name} (${selected.sku})`)) {
+      return products.slice(0, 30);
+    }
+    return products
+      .filter((p) => p.name.toLowerCase().includes(term) || p.sku.toLowerCase().includes(term))
+      .slice(0, 30);
+  }, [query, products, selected]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <input
+        type="text"
+        value={query}
+        placeholder={placeholder ?? "Buscar produto por nome ou SKU..."}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setOpen(true);
+          if (value) onChange("");
+        }}
+        className="border border-slate-300 rounded px-2 py-1 text-xs w-full"
+      />
+      {open && (
+        <div className="absolute z-10 mt-0.5 w-full max-h-48 overflow-y-auto bg-white border border-slate-300 rounded shadow-lg">
+          {matches.length === 0 ? (
+            <p className="px-2 py-1.5 text-xs text-slate-400">Nenhum produto encontrado</p>
+          ) : (
+            matches.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => {
+                  onChange(p.id);
+                  setQuery(`${p.name} (${p.sku})`);
+                  setOpen(false);
+                }}
+                className="block w-full text-left px-2 py-1.5 text-xs hover:bg-brand-50 border-b border-slate-50 last:border-0"
+              >
+                <span className="font-medium">{p.name}</span>{" "}
+                <span className="text-slate-400">({p.sku})</span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ItemReviewRow({
   nfeImportId,
@@ -38,18 +125,96 @@ function ItemReviewRow({
   const [salePrice, setSalePrice] = useState(item.salePrice ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastPurchase, setLastPurchase] = useState<ProductPurchaseHistoryEntry | null>(null);
+
+  useEffect(() => {
+    if (mode !== "existing" || !productId) {
+      setLastPurchase(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .get<ProductPurchaseHistoryEntry[]>(`/products/${productId}/purchase-history`)
+      .then((response) => {
+        if (!cancelled) setLastPurchase(response.data[0] ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setLastPurchase(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, productId]);
+
+  async function save(overridePayload?: { productId: string }) {
+    setError(null);
+    setSaving(true);
+    try {
+      const payload = overridePayload
+        ? overridePayload
+        : mode === "existing"
+          ? { productId }
+          : {
+              createNewProduct: true,
+              unitId,
+              conversionFactor: Number(conversionFactor) || 1,
+              salePrice: salePrice ? Number(salePrice) : undefined,
+            };
+      const response = await api.patch<NfeImportItem>(`/nfe/imports/${nfeImportId}/items/${item.id}`, payload);
+      onReviewed(response.data);
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const hasSuggestion = Boolean(item.suggestedProductId) && !item.reviewed && productId !== item.suggestedProductId;
+  const currentUnitPrice = Number(item.valorUnitarioComercial);
+  const lastUnitPrice = lastPurchase ? Number(lastPurchase.unitCost) : null;
+  const priceChanged = lastUnitPrice !== null && Math.abs(lastUnitPrice - currentUnitPrice) > 0.009;
 
   return (
     <tr className="border-t border-amber-100 align-top">
       <td className="py-2 pr-2">
-        {item.descricao}
-        {item.reviewed && <span className="ml-2 text-emerald-600 text-xs">revisado</span>}
+        <p>{item.descricao}</p>
+        <p className="text-slate-400 text-[11px]">cod. {item.codigoProduto}</p>
+        {item.reviewed && <span className="text-emerald-600 text-xs">revisado</span>}
       </td>
       <td className="py-2 pr-2">
         {item.quantidadeComercial} {item.unidadeComercial}
       </td>
-      <td className="py-2 pr-2">{formatCurrency(item.valorUnitarioComercial)}</td>
-      <td className="py-2 pr-2 space-y-1">
+      <td className="py-2 pr-2">
+        {formatCurrency(currentUnitPrice)}
+        {mode === "existing" && lastUnitPrice !== null && (
+          <p className={`text-[11px] ${priceChanged ? "text-amber-600 font-medium" : "text-slate-400"}`}>
+            ultima compra: {formatCurrency(lastUnitPrice)}
+            {priceChanged && " (mudou)"}
+          </p>
+        )}
+      </td>
+      <td className="py-2 pr-2 space-y-1 min-w-[260px]">
+        {hasSuggestion && (
+          <div className="flex items-center justify-between gap-2 bg-brand-50 border border-brand-200 rounded px-2 py-1 text-[11px] text-brand-800">
+            <span>
+              Sugestao (ja comprado deste fornecedor): <strong>{item.suggestedProduct?.name}</strong> (
+              {item.suggestedProduct?.sku})
+            </span>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                setMode("existing");
+                setProductId(item.suggestedProductId!);
+                save({ productId: item.suggestedProductId! });
+              }}
+              className="shrink-0 bg-brand-600 hover:bg-brand-700 text-white px-2 py-0.5 rounded"
+            >
+              Usar sugestao
+            </button>
+          </div>
+        )}
+
         <div className="flex gap-3 text-xs">
           <label className="flex items-center gap-1">
             <input type="radio" checked={mode === "existing"} onChange={() => setMode("existing")} />
@@ -62,18 +227,7 @@ function ItemReviewRow({
         </div>
 
         {mode === "existing" ? (
-          <select
-            value={productId}
-            onChange={(e) => setProductId(e.target.value)}
-            className="border border-slate-300 rounded px-2 py-1 text-xs w-full"
-          >
-            <option value="">Selecione o produto</option>
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.sku})
-              </option>
-            ))}
-          </select>
+          <ProductCombobox products={products} value={productId} onChange={setProductId} />
         ) : (
           <div className="flex gap-1">
             <select
@@ -115,30 +269,7 @@ function ItemReviewRow({
         <button
           type="button"
           disabled={saving || (mode === "existing" ? !productId : !unitId)}
-          onClick={async () => {
-            setError(null);
-            setSaving(true);
-            try {
-              const payload =
-                mode === "existing"
-                  ? { productId }
-                  : {
-                      createNewProduct: true,
-                      unitId,
-                      conversionFactor: Number(conversionFactor) || 1,
-                      salePrice: salePrice ? Number(salePrice) : undefined,
-                    };
-              const response = await api.patch<NfeImportItem>(
-                `/nfe/imports/${nfeImportId}/items/${item.id}`,
-                payload,
-              );
-              onReviewed(response.data);
-            } catch (err) {
-              setError(getApiErrorMessage(err));
-            } finally {
-              setSaving(false);
-            }
-          }}
+          onClick={() => save()}
           className="bg-slate-800 hover:bg-slate-900 text-white text-xs px-3 py-1.5 rounded disabled:opacity-50"
         >
           {saving ? "Salvando..." : "Salvar revisao"}
@@ -167,6 +298,11 @@ function PendingRow({
   const [busy, setBusy] = useState(false);
 
   const allReviewed = item.items.length > 0 && item.items.every((i) => i.reviewed);
+  const reviewedCount = item.items.filter((i) => i.reviewed).length;
+  const suggestedCount = item.items.filter((i) => i.suggestedProductId && !i.reviewed).length;
+
+  const itemsTotal = item.items.reduce((sum, i) => sum + Number(i.valorTotal), 0);
+  const totalMismatch = Math.abs(itemsTotal - Number(item.valorTotal)) > 0.5;
 
   async function handleAuthorize() {
     if (!window.confirm("Autorizar esta nota? Isso vai lancar entrada de estoque e conta a pagar.")) return;
@@ -192,9 +328,15 @@ function PendingRow({
     <div className="border border-amber-200 bg-amber-50 rounded-lg">
       <div className="flex items-center justify-between px-4 py-3">
         <div>
-          <p className="text-sm font-medium text-slate-800">{item.emitenteNome}</p>
+          <p className="text-sm font-medium text-slate-800">
+            {item.emitenteNome}
+            {item.numero && <span className="text-slate-400 font-normal"> - NF-e no {item.numero}</span>}
+          </p>
           <p className="text-xs text-slate-500">
-            CNPJ {item.emitenteCnpj} - Emissao {formatDate(item.dataEmissao)} - {formatCurrency(item.valorTotal)}
+            CNPJ {item.emitenteCnpj} - Emissao {formatDate(item.dataEmissao)} - {formatCurrency(item.valorTotal)} -{" "}
+            {item.items.length} item(ns)
+            {reviewedCount > 0 && ` - ${reviewedCount}/${item.items.length} revisado(s)`}
+            {suggestedCount > 0 && ` - ${suggestedCount} com sugestao pronta`}
           </p>
         </div>
         <div className="flex items-center gap-3 text-sm">
@@ -226,6 +368,13 @@ function PendingRow({
           {!allReviewed && (
             <p className="text-xs text-amber-700">
               Revise cada item abaixo (associe a um produto existente ou crie um novo) antes de autorizar.
+              {suggestedCount > 0 && " Itens com sugestao podem ser confirmados com um clique."}
+            </p>
+          )}
+          {totalMismatch && (
+            <p className="text-xs text-red-600">
+              Atencao: a soma dos itens ({formatCurrency(itemsTotal)}) e diferente do valor total da nota (
+              {formatCurrency(item.valorTotal)}) - pode haver frete/desconto/outras despesas nao detalhados por item.
             </p>
           )}
           <table className="w-full text-xs">
@@ -440,6 +589,7 @@ export function NfeRadar() {
         <table className="w-full text-sm mt-2">
           <thead className="bg-slate-50 text-slate-500 text-left">
             <tr>
+              <th className="px-4 py-2">NF-e</th>
               <th className="px-4 py-2">Chave de acesso</th>
               <th className="px-4 py-2">Fornecedor</th>
               <th className="px-4 py-2">Valor</th>
@@ -451,13 +601,14 @@ export function NfeRadar() {
           <tbody className="divide-y divide-slate-100">
             {history.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-slate-400">
+                <td colSpan={7} className="px-4 py-6 text-center text-slate-400">
                   Nenhuma nota no historico ainda
                 </td>
               </tr>
             )}
             {history.map((item) => (
               <tr key={item.id}>
+                <td className="px-4 py-2">{item.numero ?? "-"}</td>
                 <td className="px-4 py-2 font-mono text-xs">{item.chaveAcesso}</td>
                 <td className="px-4 py-2">{item.emitenteNome}</td>
                 <td className="px-4 py-2">{formatCurrency(item.valorTotal)}</td>

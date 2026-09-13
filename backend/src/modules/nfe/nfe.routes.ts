@@ -159,7 +159,13 @@ router.get(
         supplier: true,
         purchaseOrder: true,
         reviewedBy: { select: { name: true } },
-        items: { include: { product: { select: { name: true } }, unit: true } },
+        items: {
+          include: {
+            product: { select: { name: true } },
+            suggestedProduct: { select: { name: true, sku: true } },
+            unit: true,
+          },
+        },
       },
       orderBy: { createdAt: "desc" },
       take: 200,
@@ -227,7 +233,30 @@ router.patch(
         salePrice: data.salePrice,
         reviewed: true,
       },
+      include: { product: { select: { name: true } }, suggestedProduct: { select: { name: true, sku: true } }, unit: true },
     });
+
+    /// Associou a um produto existente? Memoriza fornecedor+codigo -> produto
+    /// (ver SupplierProductLink), pra proxima nota deste fornecedor com o
+    /// mesmo codigo ja vir com o produto sugerido automaticamente.
+    if (data.productId) {
+      await prisma.supplierProductLink.upsert({
+        where: {
+          companyId_supplierCnpj_codigoProduto: {
+            companyId,
+            supplierCnpj: nfeImport.emitenteCnpj,
+            codigoProduto: item.codigoProduto,
+          },
+        },
+        update: { productId: data.productId },
+        create: {
+          companyId,
+          supplierCnpj: nfeImport.emitenteCnpj,
+          codigoProduto: item.codigoProduto,
+          productId: data.productId,
+        },
+      });
+    }
 
     res.json(updated);
   }),

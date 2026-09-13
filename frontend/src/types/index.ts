@@ -274,6 +274,8 @@ export interface NfeImportItem {
   conversionFactor: string;
   salePrice?: string | null;
   reviewed: boolean;
+  suggestedProductId?: string | null;
+  suggestedProduct?: { name: string; sku: string } | null;
 }
 
 export interface NfeDuplicataPreview {
@@ -285,6 +287,7 @@ export interface NfeDuplicataPreview {
 export interface NfeImport {
   id: string;
   chaveAcesso: string;
+  numero?: string | null;
   emitenteCnpj: string;
   emitenteNome: string;
   valorTotal: string;

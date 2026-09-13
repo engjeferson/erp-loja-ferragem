@@ -67,10 +67,25 @@ export async function recordPendingImport(
   const existing = await prisma.nfeImport.findUnique({ where: { chaveAcesso: nfe.chaveAcesso } });
   if (existing) return existing;
 
+  /// Se este fornecedor ja teve algum dos codigos de produto desta nota
+  /// associado a um produto do catalogo antes (ver SupplierProductLink),
+  /// a nota ja chega com a sugestao pronta - o usuario so confirma em vez
+  /// de procurar o produto de novo. E o que torna a revisao rapida quando
+  /// se compra sempre dos mesmos fornecedores, como num ERP maduro.
+  const links = await prisma.supplierProductLink.findMany({
+    where: {
+      companyId,
+      supplierCnpj: nfe.emitenteCnpj,
+      codigoProduto: { in: nfe.itens.map((item) => item.codigoProduto) },
+    },
+  });
+  const suggestionByCode = new Map(links.map((link) => [link.codigoProduto, link.productId]));
+
   return prisma.nfeImport.create({
     data: {
       companyId,
       chaveAcesso: nfe.chaveAcesso,
+      numero: nfe.numero,
       nsu,
       emitenteCnpj: nfe.emitenteCnpj,
       emitenteNome: nfe.emitenteNome,
@@ -90,6 +105,7 @@ export async function recordPendingImport(
           quantidadeComercial: item.quantidadeComercial,
           valorUnitarioComercial: item.valorUnitarioComercial,
           valorTotal: item.valorTotal,
+          suggestedProductId: suggestionByCode.get(item.codigoProduto) ?? null,
         })),
       },
     },
