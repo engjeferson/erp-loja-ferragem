@@ -6,7 +6,11 @@
 
   Uso:
     .\copy-envs-windows.ps1
-    .\copy-envs-windows.ps1 -BackupRoot "D:\segredos sistemas" -DestinationRoot "$HOME\dev"
+    .\copy-envs-windows.ps1 -BackupRoot "$HOME\Desktop" -DestinationRoot "$HOME\dev"
+
+  O script tenta descobrir sozinho onde estao as pastas (Desktop direto,
+  Desktop\segredos sistemas, ou D:\segredos sistemas), testando algumas
+  localizacoes comuns. Se nao achar, passe o caminho exato em -BackupRoot.
 
   Pre-requisito: os repositorios ja devem estar clonados em -DestinationRoot
   (rode o setup-windows.ps1 ou 'git clone' antes deste script).
@@ -14,7 +18,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$BackupRoot = "D:\segredos sistemas",
+    [string]$BackupRoot = "",
     [string]$DestinationRoot = "$HOME\dev"
 )
 
@@ -33,10 +37,38 @@ $map = @(
     @{ BackupFolder = "whats inbox";     Repo = "whatsapp-inbox";        RelativeEnvDir = "." }
 )
 
-if (-not (Test-Path $BackupRoot)) {
-    Write-Warn "Pasta de backup nao encontrada: $BackupRoot"
+function Resolve-BackupRoot([string]$explicitRoot, $mapEntries) {
+    if ($explicitRoot) { return $explicitRoot }
+
+    $candidates = @(
+        (Join-Path $HOME "Desktop\segredos sistemas"),
+        (Join-Path $HOME "Desktop"),
+        (Join-Path $HOME "OneDrive\Desktop\segredos sistemas"),
+        (Join-Path $HOME "OneDrive\Desktop"),
+        "D:\segredos sistemas"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Path $candidate)) { continue }
+        foreach ($entry in $mapEntries) {
+            if (Test-Path (Join-Path $candidate $entry.BackupFolder)) {
+                Write-Ok "Pasta de backup detectada automaticamente: $candidate"
+                return $candidate
+            }
+        }
+    }
+    return $null
+}
+
+$BackupRoot = Resolve-BackupRoot -explicitRoot $BackupRoot -mapEntries $map
+
+if (-not $BackupRoot -or -not (Test-Path $BackupRoot)) {
+    Write-Warn "Nao encontrei automaticamente a pasta com os backups (agenda ZAP, CRM reis, etc.)."
+    Write-Warn "Rode de novo passando o caminho exato, por exemplo:"
+    Write-Warn "  .\copy-envs-windows.ps1 -BackupRoot `"$HOME\Desktop\segredos sistemas`""
     exit 1
 }
+Write-Step "Usando pasta de backup: $BackupRoot"
 
 foreach ($item in $map) {
     $srcDir = Join-Path $BackupRoot $item.BackupFolder
