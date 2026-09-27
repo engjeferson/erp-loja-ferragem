@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   Configura o ambiente de desenvolvimento do erp-loja-ferragem em um Windows novo:
   instala Git/Node/Docker Desktop via winget, clona o(s) repositório(s), roda

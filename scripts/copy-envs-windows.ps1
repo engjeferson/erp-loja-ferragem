@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   Copia os .env / .env.local salvos em um backup (ex: pendrive, SSD externo)
   para dentro de cada repositorio ja clonado no Windows, no lugar certo
@@ -40,11 +40,14 @@ $map = @(
 function Resolve-BackupRoot([string]$explicitRoot, $mapEntries) {
     if ($explicitRoot) { return $explicitRoot }
 
+    # [Environment]::GetFolderPath resolve a pasta da Area de Trabalho no
+    # caminho real, seja qual for o idioma do Windows (Desktop, Area de
+    # Trabalho, etc.) e mesmo se o OneDrive tiver redirecionado ela.
+    $desktop = [Environment]::GetFolderPath("Desktop")
+
     $candidates = @(
-        (Join-Path $HOME "Desktop\segredos sistemas"),
-        (Join-Path $HOME "Desktop"),
-        (Join-Path $HOME "OneDrive\Desktop\segredos sistemas"),
-        (Join-Path $HOME "OneDrive\Desktop"),
+        (Join-Path $desktop "segredos sistemas"),
+        $desktop,
         "D:\segredos sistemas"
     )
 
@@ -104,7 +107,7 @@ foreach ($item in $map) {
 }
 
 # -----------------------------------------------------------------------
-# Caso especial: reisengenhariars-site NAO usa .env — usa um JSON de
+# Caso especial: reisengenhariars-site NAO usa .env - usa um JSON de
 # credenciais FTP fora da pasta do projeto (deploy.py le de
 # ~/.reis-site-deploy/ftp_credentials.json). So copiamos se existir.
 # -----------------------------------------------------------------------
@@ -120,7 +123,7 @@ if ($ftpCredsCandidate) {
     Write-Ok "ftp_credentials.json -> $ftpDest"
 } else {
     Write-Warn "Nao encontrei um arquivo tipo 'ftp_credentials.json' em '$siteBackup'."
-    Write-Warn "Esse projeto (reisengenhariars-site) nao usa .env — se so tiver .env/.env.local la, confirme com o usuario antes de usar, pois o deploy.py nao le esses arquivos."
+    Write-Warn "Esse projeto (reisengenhariars-site) nao usa .env - se so tiver .env/.env.local la, confirme com o usuario antes de usar, pois o deploy.py nao le esses arquivos."
 }
 
 Write-Step "Concluido"
