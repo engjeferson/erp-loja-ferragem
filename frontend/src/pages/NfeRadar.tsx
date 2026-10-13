@@ -126,32 +126,29 @@ function initialModeFor(item: NfeImportItem): StepMode {
 }
 
 /**
- * Uma etapa do assistente de conferencia: um item da nota por vez, em tela
- * cheia, com os botoes de acao sempre visiveis embaixo - pensado pra ser
- * operado rapido no balcao (inclusive em tablet/celular), em vez da tabela
- * densa que existia antes.
+ * Um card por item da nota, todos visiveis juntos na mesma tela (em vez de
+ * um assistente paginado) - mais rapido de conferir quando a nota tem
+ * varios itens, ja que da pra ver tudo de uma vez como no sistema que o
+ * lojista ja estava acostumado. Depois de confirmado, o card encolhe pra
+ * uma linha com "revisado" (com opcao de reabrir e editar), pra nao deixar
+ * a tela gigante numa nota com muitos itens.
  */
-function ItemStep({
+function ItemCard({
   nfeImportId,
   item,
   products,
   units,
-  stepIndex,
-  totalSteps,
+  index,
   onReviewed,
-  onPrev,
-  onNext,
 }: {
   nfeImportId: string;
   item: NfeImportItem;
   products: Product[];
   units: Unit[];
-  stepIndex: number;
-  totalSteps: number;
+  index: number;
   onReviewed: (item: NfeImportItem) => void;
-  onPrev: () => void;
-  onNext: () => void;
 }) {
+  const [editing, setEditing] = useState(!item.reviewed);
   const [mode, setMode] = useState<StepMode>(() => initialModeFor(item));
   const [productId, setProductId] = useState(item.productId ?? "");
   const [unitId, setUnitId] = useState(item.unitId ?? "");
@@ -160,16 +157,6 @@ function ItemStep({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastPurchase, setLastPurchase] = useState<ProductPurchaseHistoryEntry | null>(null);
-
-  useEffect(() => {
-    setMode(initialModeFor(item));
-    setProductId(item.productId ?? "");
-    setUnitId(item.unitId ?? "");
-    setConversionFactor(item.conversionFactor ?? "1");
-    setSalePrice(item.salePrice ?? "");
-    setError(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.id]);
 
   const lookupProductId = mode === "suggestion" ? item.suggestedProductId ?? "" : productId;
 
@@ -198,7 +185,7 @@ function ItemStep({
     try {
       const response = await api.patch<NfeImportItem>(`/nfe/imports/${nfeImportId}/items/${item.id}`, payload);
       onReviewed(response.data);
-      onNext();
+      setEditing(false);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -233,34 +220,36 @@ function ItemStep({
   const lastUnitPrice = lastPurchase ? Number(lastPurchase.unitCost) : null;
   const priceChanged = lastUnitPrice !== null && Math.abs(lastUnitPrice - currentUnitPrice) > 0.009;
 
-  const segments = Array.from({ length: totalSteps }, (_, i) => (i < stepIndex ? "done" : i === stepIndex ? "current" : "upcoming"));
+  if (item.reviewed && !editing) {
+    return (
+      <div className="bg-white rounded-2xl border border-emerald-200 p-4 flex items-center justify-between gap-3">
+        <div className="min-w-0 flex items-center gap-3">
+          <span className="shrink-0 w-7 h-7 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-xs font-bold">
+            ✓
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-slate-800 truncate">
+              {index + 1}. {titleCase(item.descricao)}
+            </p>
+            <p className="text-xs text-slate-500 truncate">
+              → {item.product?.name ?? (item.createNewProduct ? "Novo produto" : "-")}
+              {item.product ? "" : item.createNewProduct && item.unit ? ` · ${item.unit.abbreviation}` : ""}
+            </p>
+          </div>
+        </div>
+        <button type="button" onClick={() => setEditing(true)} className="shrink-0 text-xs font-semibold text-brand-700 underline">
+          Editar
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <div className="pb-28">
-      <div className="mb-5">
-        <div className="flex items-baseline justify-between mb-2">
-          <span className="text-xs font-semibold text-slate-500">
-            Item {stepIndex + 1} de {totalSteps}
-          </span>
-          <span className="text-xs font-semibold text-slate-400">
-            {Math.round((stepIndex / totalSteps) * 100)}%
-          </span>
-        </div>
-        <div className="flex gap-1">
-          {segments.map((s, i) => (
-            <div
-              key={i}
-              className={`h-1.5 flex-1 rounded-full ${
-                s === "done" ? "bg-brand-600" : s === "current" ? "bg-brand-300" : "bg-slate-200"
-              }`}
-            />
-          ))}
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm mb-4">
+    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+      <div className="pb-4 mb-4 border-b border-dashed border-slate-200">
+        <p className="text-xs font-semibold text-slate-400 mb-1">Item {index + 1}</p>
         <h2 className="text-xl font-semibold text-slate-800 leading-tight">{titleCase(item.descricao)}</h2>
-        <p className="text-xs text-slate-400 font-mono mt-1 mb-4">cod. {item.codigoProduto}</p>
+        <p className="text-xs text-slate-400 font-mono mt-1">cod. {item.codigoProduto}</p>
         <div className="flex gap-6 pt-4 border-t border-dashed border-slate-200">
           <div>
             <p className="text-[11px] uppercase tracking-wide text-slate-400">Qtd. na nota</p>
@@ -315,7 +304,7 @@ function ItemStep({
 
       {mode === "search" && (
         <div className="space-y-3 mb-3">
-          <ProductCombobox products={products} value={productId} onChange={setProductId} autoFocus />
+          <ProductCombobox products={products} value={productId} onChange={setProductId} />
           <div className="flex items-center gap-3 text-xs text-slate-400">
             <div className="flex-1 h-px bg-slate-200" />
             ou
@@ -389,14 +378,14 @@ function ItemStep({
 
       {error && <p className="text-red-600 text-sm mb-3">{error}</p>}
 
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 px-4 py-3 flex gap-3 max-w-3xl mx-auto">
-        {stepIndex > 0 && (
+      <div className="flex gap-3">
+        {item.reviewed && (
           <button
             type="button"
-            onClick={onPrev}
-            className="shrink-0 w-14 rounded-xl border border-slate-200 text-slate-600 text-xl"
+            onClick={() => setEditing(false)}
+            className="shrink-0 rounded-xl border border-slate-200 text-slate-600 px-4 font-semibold text-sm"
           >
-            ←
+            Cancelar
           </button>
         )}
         {mode !== "suggestion" && (
@@ -406,7 +395,7 @@ function ItemStep({
             onClick={confirm}
             className="flex-1 bg-brand-600 hover:bg-brand-700 text-white font-semibold rounded-xl py-3.5 text-base disabled:opacity-40"
           >
-            {saving ? "Salvando..." : stepIndex === totalSteps - 1 ? "Confirmar e ver resumo" : "Confirmar e proximo item"}
+            {saving ? "Salvando..." : "Confirmar item"}
           </button>
         )}
       </div>
@@ -414,77 +403,8 @@ function ItemStep({
   );
 }
 
-/** Resumo final da conferencia: tudo revisado, confere de uma vez antes de autorizar. */
-function ReviewSummary({
-  item,
-  onAuthorize,
-  onReject,
-  busy,
-}: {
-  item: NfeImport;
-  onAuthorize: () => void;
-  onReject: () => void;
-  busy: boolean;
-}) {
-  const itemsTotal = item.items.reduce((sum, i) => sum + Number(i.valorTotal), 0);
-  const totalMismatch = Math.abs(itemsTotal - Number(item.valorTotal)) > 0.5;
-
-  return (
-    <div className="pb-6">
-      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-4">
-        <p className="text-lg font-semibold text-slate-800">{item.emitenteNome}</p>
-        <p className="text-sm text-slate-500">
-          NF-e {item.numero ?? "-"} · emitida {formatDate(item.dataEmissao)} · {formatCurrency(item.valorTotal)}
-        </p>
-      </div>
-
-      <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 mb-4">
-        {item.items.map((nfeItem) => (
-          <div key={nfeItem.id} className="flex items-center justify-between gap-3 px-4 py-3">
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-slate-800 truncate">{titleCase(nfeItem.descricao)}</p>
-              <p className="text-xs text-slate-500 truncate">
-                → {nfeItem.product?.name ?? (nfeItem.createNewProduct ? "Novo produto" : "-")}
-                {nfeItem.product ? "" : nfeItem.createNewProduct && nfeItem.unit ? ` · ${nfeItem.unit.abbreviation}` : ""}
-              </p>
-            </div>
-            <span className="shrink-0 w-6 h-6 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-xs font-bold">
-              ✓
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {totalMismatch && (
-        <div className="flex gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-slate-700 mb-4">
-          <span>⚠</span>
-          <span>
-            A soma dos itens ({formatCurrency(itemsTotal)}) e diferente do valor total da nota (
-            {formatCurrency(item.valorTotal)}) - pode haver frete/desconto/outras despesas nao detalhados por item.
-            Pode autorizar normalmente.
-          </span>
-        </div>
-      )}
-
-      <button
-        type="button"
-        disabled={busy}
-        onClick={onAuthorize}
-        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl py-3.5 text-base disabled:opacity-50"
-      >
-        {busy ? "Autorizando..." : "Autorizar entrada no estoque"}
-      </button>
-      <p className="text-xs text-slate-400 text-center mt-2">Atualiza o estoque e lanca a conta a pagar automaticamente</p>
-
-      <button type="button" disabled={busy} onClick={onReject} className="w-full text-center text-sm text-red-600 underline py-3">
-        Rejeitar esta nota
-      </button>
-    </div>
-  );
-}
-
-/** Assistente completo de conferencia de uma nota: passo a passo + resumo final. */
-function ReviewWizard({
+/** Conferencia completa de uma nota: todos os itens numa tela so, com autorizar/rejeitar ao final. */
+function ReviewList({
   item,
   products,
   units,
@@ -501,20 +421,12 @@ function ReviewWizard({
   onAuthorize: () => Promise<void>;
   onReject: () => Promise<void>;
 }) {
-  const [view, setView] = useState<"steps" | "summary">("steps");
-  const [stepIndex, setStepIndex] = useState(0);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    const firstUnreviewed = item.items.findIndex((i) => !i.reviewed);
-    if (firstUnreviewed === -1) {
-      setView("summary");
-    } else {
-      setView("steps");
-      setStepIndex(firstUnreviewed);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.id]);
+  const reviewedCount = item.items.filter((i) => i.reviewed).length;
+  const allReviewed = item.items.length > 0 && reviewedCount === item.items.length;
+  const itemsTotal = item.items.reduce((sum, i) => sum + Number(i.valorTotal), 0);
+  const totalMismatch = Math.abs(itemsTotal - Number(item.valorTotal)) > 0.5;
 
   async function handleAuthorize() {
     if (!window.confirm("Autorizar esta nota? Isso vai lancar entrada de estoque e conta a pagar.")) return;
@@ -536,11 +448,9 @@ function ReviewWizard({
     }
   }
 
-  const currentItem = item.items[stepIndex];
-
   return (
-    <div className="max-w-xl mx-auto">
-      <div className="flex items-center gap-3 mb-5">
+    <div className="max-w-2xl mx-auto pb-6">
+      <div className="flex items-center gap-3 mb-2">
         <button
           type="button"
           onClick={onBack}
@@ -549,34 +459,63 @@ function ReviewWizard({
         >
           ←
         </button>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="text-lg font-semibold text-slate-800 truncate">{item.emitenteNome}</p>
-          <p className="text-xs text-slate-500">NF-e {item.numero ?? "-"}</p>
+          <p className="text-xs text-slate-500">
+            NF-e {item.numero ?? "-"} · emitida {formatDate(item.dataEmissao)} · {formatCurrency(item.valorTotal)}
+          </p>
         </div>
+        <span className="shrink-0 text-xs font-semibold text-slate-500">
+          {reviewedCount} de {item.items.length} conferidos
+        </span>
       </div>
 
-      {view === "steps" && currentItem && (
-        <ItemStep
-          key={currentItem.id}
-          nfeImportId={item.id}
-          item={currentItem}
-          products={products}
-          units={units}
-          stepIndex={stepIndex}
-          totalSteps={item.items.length}
-          onReviewed={onItemReviewed}
-          onPrev={() => setStepIndex((i) => Math.max(0, i - 1))}
-          onNext={() => {
-            if (stepIndex === item.items.length - 1) {
-              setView("summary");
-            } else {
-              setStepIndex((i) => i + 1);
-            }
-          }}
+      <div className="h-1.5 rounded-full bg-slate-200 mb-5 overflow-hidden">
+        <div
+          className="h-full bg-brand-600 rounded-full transition-all"
+          style={{ width: `${item.items.length ? (reviewedCount / item.items.length) * 100 : 0}%` }}
         />
+      </div>
+
+      <div className="space-y-3 mb-5">
+        {item.items.map((nfeItem, index) => (
+          <ItemCard
+            key={nfeItem.id}
+            nfeImportId={item.id}
+            item={nfeItem}
+            products={products}
+            units={units}
+            index={index}
+            onReviewed={onItemReviewed}
+          />
+        ))}
+      </div>
+
+      {totalMismatch && (
+        <div className="flex gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-slate-700 mb-4">
+          <span>⚠</span>
+          <span>
+            A soma dos itens ({formatCurrency(itemsTotal)}) e diferente do valor total da nota (
+            {formatCurrency(item.valorTotal)}) - pode haver frete/desconto/outras despesas nao detalhados por item.
+            Pode autorizar normalmente.
+          </span>
+        </div>
       )}
 
-      {view === "summary" && <ReviewSummary item={item} onAuthorize={handleAuthorize} onReject={handleReject} busy={busy} />}
+      <button
+        type="button"
+        disabled={busy || !allReviewed}
+        title={!allReviewed ? "Confirme todos os itens antes de autorizar" : undefined}
+        onClick={handleAuthorize}
+        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl py-3.5 text-base disabled:opacity-50"
+      >
+        {busy ? "Autorizando..." : allReviewed ? "Autorizar entrada no estoque" : `Confira os ${item.items.length - reviewedCount} item(ns) restante(s)`}
+      </button>
+      <p className="text-xs text-slate-400 text-center mt-2">Atualiza o estoque e lanca a conta a pagar automaticamente</p>
+
+      <button type="button" disabled={busy} onClick={handleReject} className="w-full text-center text-sm text-red-600 underline py-3">
+        Rejeitar esta nota
+      </button>
     </div>
   );
 }
@@ -710,7 +649,7 @@ export function NfeRadar() {
 
   if (activeImport) {
     return (
-      <ReviewWizard
+      <ReviewList
         item={activeImport}
         products={products}
         units={units}
