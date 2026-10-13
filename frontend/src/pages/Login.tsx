@@ -36,7 +36,7 @@ export function Login() {
         className="bg-white p-8 rounded-lg shadow-md w-full max-w-sm space-y-4"
       >
         <h1 className="text-xl font-semibold text-center text-slate-800">
-          ERP Loja Ferragem
+          VenderaERP
         </h1>
         <p className="text-center text-sm text-slate-500">Acesse sua conta</p>
 

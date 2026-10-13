@@ -65,7 +65,7 @@ export function AppLayout() {
     <div className="flex min-h-screen">
       <aside className="w-60 shrink-0 bg-slate-900 text-slate-100 flex flex-col">
         <div className="px-4 py-5 border-b border-slate-800">
-          <p className="text-lg font-semibold">ERP Loja Ferragem</p>
+          <p className="text-lg font-semibold">VenderaERP</p>
           {user?.companyName && <p className="text-xs text-slate-400 truncate">{user.companyName}</p>}
         </div>
         <nav className="flex-1 py-4 overflow-y-auto">
